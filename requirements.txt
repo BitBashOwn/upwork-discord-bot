@@ -1,0 +1,8 @@
+selenium
+beautifulsoup4
+requests
+cloudscraper
+discord.py
+sqlalchemy
+psycopg2-binary   # PostgreSQL
+python-dotenv

@@ -1,0 +1,30 @@
+
+services:
+  discord-bot:
+    build: .
+    restart: always
+    depends_on:
+      - db
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - UPWORK_EMAIL=${UPWORK_EMAIL}
+      - UPWORK_PASSWORD=${UPWORK_PASSWORD}
+      - POSTGRES_URL=${POSTGRES_URL}
+    env_file:
+      - .env
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: upwork_jobs
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 1234
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
