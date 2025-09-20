@@ -202,41 +202,53 @@ async def jobs(ctx, *, keyword=None):
     loading_msg = await ctx.send("🔍 Searching for jobs...")
     
     try:
-        
         jobs = scraper.fetch_jobs(query=keyword, limit=10)
-        
-        if jobs:
+        # Filter jobs by keyword in title, description, or skills
+        keyword_lower = keyword.lower()
+        filtered_jobs = []
+        for job in jobs:
+            title = job.get('title', '').lower()
+            description = job.get('description', '').lower()
+            skills = [s.lower() for s in job.get('skills', [])]
+            if (
+                keyword_lower in title
+                or keyword_lower in description
+                or any(keyword_lower in skill for skill in skills)
+            ):
+                filtered_jobs.append(job)
+
+        if filtered_jobs:
             # Delete loading message
             await loading_msg.delete()
-            
+
             # Create main results embed
             main_embed = discord.Embed(
                 title=f"🎯 Job Search Results for '{keyword}'",
-                description=f"Found {len(jobs)} jobs (showing up to 10)",
+                description=f"Found {len(filtered_jobs)} jobs (showing up to 10)",
                 color=0x00ff00
             )
             main_embed.set_footer(text=f"Requested by {ctx.author.display_name}")
             await ctx.send(embed=main_embed)
-            
-            # Send all jobs found (up to 10)
-            for i, job in enumerate(jobs, 1):
+
+            # Send all filtered jobs found (up to 10)
+            for i, job in enumerate(filtered_jobs, 1):
                 embed = discord.Embed(
                     title=f"📋 {job['title']}",
                     description=job['description'][:400] + "..." if len(job['description']) > 400 else job['description'],
                     color=0x3498db
                 )
-                
+
                 embed.add_field(name="💰 Budget", value=job.get('budget', 'Not specified'), inline=True)
                 # embed.add_field(name="🏢 Client", value=job.get('client', 'Unknown'), inline=True)
                 # embed.add_field(name="👥 Applicants", value=str(job.get('total_applicants', 'N/A')), inline=True)
-                
+
                 if job.get('experience_level'):
                     embed.add_field(name="📊 Experience", value=job.get('experience_level'), inline=True)
                 if job.get('job_type'):
                     embed.add_field(name="💼 Job Type", value=job.get('job_type'), inline=True)
                 if job.get('duration_label'):
                     embed.add_field(name="⏱️ Duration", value=job.get('duration_label'), inline=True)
-                
+
                 # Add skills with better formatting for command results
                 skills = job.get('skills', [])
                 if skills:
@@ -244,23 +256,23 @@ async def jobs(ctx, *, keyword=None):
                     skill_display = ", ".join(skills[:8])
                     if len(skills) > 8:
                         skill_display += f" +{len(skills) - 8} more"
-                    
+
                     embed.add_field(
-                        name="🎯 Required Skills", 
-                        value=f"`{skill_display}`", 
+                        name="🎯 Required Skills",
+                        value=f"`{skill_display}`",
                         inline=False
                     )
-                
-                embed.set_footer(text=f"Job {i} of {len(jobs)} • Posted: {job.get('createdDateTime', 'Unknown')}")
-                
+
+                embed.set_footer(text=f"Job {i} of {len(filtered_jobs)} • Posted: {job.get('createdDateTime', 'Unknown')}")
+
                 msg = await ctx.send(embed=embed)
                 await msg.add_reaction("✅")
-                
+
                 # Small delay to avoid rate limits
                 await asyncio.sleep(0.5)
         else:
             await loading_msg.edit(content="😞 No jobs found for that keyword. Try different search terms!")
-            
+
     except Exception as e:
         print(f"❌ Error in jobs command: {e}")
         await loading_msg.edit(content="❌ An error occurred while searching. Please try again later.")
