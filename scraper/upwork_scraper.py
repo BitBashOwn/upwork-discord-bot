@@ -14,22 +14,20 @@ class UpworkScraper:
     # Primary GraphQL endpoint for visitor job search
     GRAPHQL_URL = "https://www.upwork.com/api/graphql/v1?alias=visitorJobSearch"
     
-    # Multiple token extraction URLs - GraphQL endpoints that can provide fresh tokens
+    # Token extraction endpoints - these should work without authentication
     TOKEN_EXTRACTION_URLS = [
-        "https://www.upwork.com/api/graphql/v1?alias=searchFacets",
-        "https://www.upwork.com/api/graphql/v1?alias=visitorSavedSearch", 
-        "https://www.upwork.com/api/graphql/v1?alias=visitorJobSearch",
-        "https://www.upwork.com/api/graphql/v1?alias=getRecommendedJobs",
-        "https://www.upwork.com/api/graphql/v1?alias=universalSearch"
+        "https://www.upwork.com/",
+        "https://www.upwork.com/nx/find-work/",
+        "https://www.upwork.com/nx/search/jobs/",
+        "https://www.upwork.com/nx/",
+        "https://www.upwork.com/nx/job-search/"
     ]
     
-    # Fallback page URLs if GraphQL fails
-    FALLBACK_PAGE_URLS = [
-        "https://www.upwork.com/nx/search/jobs/",
-        "https://www.upwork.com/nx/find-work/",
-        "https://www.upwork.com/",
-        "https://www.upwork.com/nx/search/jobs/?q=python",
-        "https://www.upwork.com/nx/search/jobs/?nbs=1"
+    # Unauthenticated GraphQL endpoints for token bootstrap
+    BOOTSTRAP_GRAPHQL_URLS = [
+        "https://www.upwork.com/api/v4/visitor/stats",
+        "https://www.upwork.com/api/v4/visitor/config", 
+        "https://www.upwork.com/api/v4/visitor/health"
     ]
 
     def __init__(self):
@@ -175,123 +173,279 @@ class UpworkScraper:
             "Vnd-Eo-Trace-Id": self.session_trace_id
         })
 
-    def _get_next_extraction_url(self):
-        """Get the next URL for token extraction with rotation"""
-        if self.current_extraction_url_index >= len(self.TOKEN_EXTRACTION_URLS):
-            self.current_extraction_url_index = 0
-            
-        url = self.TOKEN_EXTRACTION_URLS[self.current_extraction_url_index]
-        self.current_extraction_url_index += 1
-        return url
-
-    def _extract_tokens_from_graphql(self):
-        """Extract tokens using GraphQL endpoints"""
-        print("Trying GraphQL token extraction...")
+    def _bootstrap_fresh_session(self):
+        """Bootstrap a completely fresh session without any authentication"""
+        print("Bootstrapping fresh session...")
         
-        # Try different GraphQL endpoints
-        for attempt in range(len(self.TOKEN_EXTRACTION_URLS)):
-            extraction_url = self._get_next_extraction_url()
-            print(f"Attempting token extraction from: {extraction_url}")
+        try:
+            # Clear old auth tokens temporarily
+            old_auth_token = self.current_auth_token
+            old_visitor_token = self.visitor_topnav_gql_token
             
-            try:
-                # Generate new session IDs for this request
-                self._generate_session_ids()
-                
-                # Simple GraphQL query that should work for most endpoints
-                test_payload = {
-                    "query": "query { __typename }",
-                    "variables": {}
-                }
-                
-                headers_for_graphql = self.base_headers.copy()
-                headers_for_graphql.update({
-                    "Accept": "application/json",
-                    "Referer": "https://www.upwork.com/nx/search/jobs/",
-                    "X-Requested-With": "XMLHttpRequest"
-                })
-                
-                # Remove authorization header for token extraction
-                if 'Authorization' in headers_for_graphql:
-                    del headers_for_graphql['Authorization']
-                
-                response = self.scraper.post(
-                    extraction_url,
-                    headers=headers_for_graphql,
-                    cookies=self.browser_cookies,
-                    data=json.dumps(test_payload),
-                    timeout=15
-                )
-                
-                print(f"GraphQL extraction response: {response.status_code}")
-                
-                if response.status_code == 200:
-                    # Extract tokens from cookies
-                    extracted_cookies = {}
-                    for cookie in response.cookies:
-                        extracted_cookies[cookie.name] = cookie.value
-
-                    # Look for token cookies
-                    visitor_token = (extracted_cookies.get('UniversalSearchNuxt_vt') or 
-                                   extracted_cookies.get('visitor_topnav_gql_token'))
-                    visitor_id = extracted_cookies.get('visitor_id')
+            # Remove authentication temporarily
+            self.current_auth_token = None
+            self.visitor_topnav_gql_token = None
+            
+            # Generate completely new session
+            self._generate_session_ids()
+            
+            # Create clean headers for bootstrap (no auth)
+            bootstrap_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br, zstd",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Ch-Ua": self.base_headers["Sec-Ch-Ua"],
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": self.base_headers["Sec-Ch-Ua-Platform"],
+                "Cache-Control": "no-cache"
+            }
+            
+            # Clear critical cookies for fresh start
+            fresh_cookies = {}
+            
+            # Try to get fresh session from main page
+            print("Loading fresh Upwork homepage...")
+            response = self.scraper.get(
+                "https://www.upwork.com/",
+                headers=bootstrap_headers,
+                cookies=fresh_cookies,
+                timeout=30
+            )
+            
+            print(f"Bootstrap homepage response: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Extract fresh tokens from page and cookies
+                fresh_tokens = self._extract_tokens_from_response(response)
+                if fresh_tokens:
+                    print("Successfully bootstrapped fresh session!")
+                    return True
                     
-                    if visitor_token:
-                        print(f"Found fresh token from GraphQL: {visitor_token[:20]}...")
-                        self.current_auth_token = visitor_token
-                        self.visitor_topnav_gql_token = visitor_token
-                        self.browser_cookies['UniversalSearchNuxt_vt'] = visitor_token
+            # Try backup bootstrap URLs
+            backup_urls = [
+                "https://www.upwork.com/nx/",
+                "https://www.upwork.com/nx/find-work/",
+                "https://www.upwork.com/signup/"
+            ]
+            
+            for url in backup_urls:
+                try:
+                    print(f"Trying bootstrap URL: {url}")
+                    response = self.scraper.get(
+                        url,
+                        headers=bootstrap_headers,
+                        cookies=fresh_cookies,
+                        timeout=30
+                    )
+                    
+                    print(f"Bootstrap {url} response: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        fresh_tokens = self._extract_tokens_from_response(response)
+                        if fresh_tokens:
+                            print(f"Successfully bootstrapped from {url}")
+                            return True
+                            
+                    time.sleep(random.uniform(2, 4))
+                    
+                except Exception as e:
+                    print(f"Bootstrap failed for {url}: {e}")
+                    continue
+            
+            # Restore old tokens if bootstrap failed
+            self.current_auth_token = old_auth_token
+            self.visitor_topnav_gql_token = old_visitor_token
+            
+            return False
+            
+        except Exception as e:
+            print(f"Bootstrap session failed: {e}")
+            # Restore old tokens
+            self.current_auth_token = old_auth_token
+            self.visitor_topnav_gql_token = old_visitor_token
+            return False
+
+    def _extract_tokens_from_response(self, response):
+        """Extract tokens from HTTP response (cookies, headers, and HTML)"""
+        try:
+            found_tokens = False
+            
+            # Method 1: Extract from response cookies
+            print("Extracting tokens from response cookies...")
+            for cookie in response.cookies:
+                if any(keyword in cookie.name.lower() for keyword in ['token', 'visitor', 'oauth']):
+                    print(f"Found cookie token: {cookie.name} = {cookie.value[:20]}...")
+                    
+                    if 'visitor_id' in cookie.name.lower():
+                        self.current_visitor_id = cookie.value
+                        self.base_headers['Vnd-Eo-Visitorid'] = cookie.value
+                        self.browser_cookies['visitor_id'] = cookie.value
+                        found_tokens = True
                         
-                        if visitor_id:
-                            self.current_visitor_id = visitor_id
-                            self.browser_cookies['visitor_id'] = visitor_id
-                            self.base_headers['Vnd-Eo-Visitorid'] = visitor_id
+                    elif any(token_key in cookie.name.lower() for token_key in ['oauth', 'token', 'universalsearch']):
+                        self.current_auth_token = cookie.value
+                        self.visitor_topnav_gql_token = cookie.value
+                        self.browser_cookies['UniversalSearchNuxt_vt'] = cookie.value
+                        found_tokens = True
                         
-                        return True
+                # Update all received cookies
+                self.browser_cookies[cookie.name] = cookie.value
                 
-                # Check response headers for tokens
-                set_cookie_header = response.headers.get('Set-Cookie', '')
-                if 'oauth2v2_' in set_cookie_header:
-                    token_match = re.search(r'oauth2v2_[a-f0-9]{32}', set_cookie_header)
+            # Method 2: Extract from Set-Cookie headers
+            print("Extracting tokens from Set-Cookie headers...")
+            set_cookie_headers = response.headers.get_list('Set-Cookie') if hasattr(response.headers, 'get_list') else [response.headers.get('Set-Cookie', '')]
+            
+            for set_cookie in set_cookie_headers:
+                if set_cookie and 'oauth2v2_' in set_cookie:
+                    token_match = re.search(r'oauth2v2_[a-f0-9]{32}', set_cookie)
                     if token_match:
                         new_token = token_match.group()
-                        print(f"Found token in Set-Cookie header: {new_token[:20]}...")
+                        print(f"Found token in Set-Cookie: {new_token[:20]}...")
                         self.current_auth_token = new_token
                         self.visitor_topnav_gql_token = new_token
                         self.browser_cookies['UniversalSearchNuxt_vt'] = new_token
-                        return True
+                        found_tokens = True
+                        
+                # Extract visitor ID from Set-Cookie
+                visitor_match = re.search(r'visitor_id=([^;]+)', set_cookie) if set_cookie else None
+                if visitor_match:
+                    visitor_id = visitor_match.group(1)
+                    print(f"Found visitor_id in Set-Cookie: {visitor_id}")
+                    self.current_visitor_id = visitor_id
+                    self.base_headers['Vnd-Eo-Visitorid'] = visitor_id
+                    self.browser_cookies['visitor_id'] = visitor_id
+                    found_tokens = True
+                    
+            # Method 3: Extract from HTML content (script tags, meta tags)
+            if hasattr(response, 'text'):
+                print("Extracting tokens from HTML content...")
+                html_content = response.text
                 
-                # Small delay between attempts
-                time.sleep(random.uniform(1, 3))
+                # Look for tokens in script tags
+                script_patterns = [
+                    r'"oauth2v2_[a-f0-9]{32}"',
+                    r"'oauth2v2_[a-f0-9]{32}'",
+                    r'oauth2v2_[a-f0-9]{32}',
+                    r'"visitor_id":\s*"([^"]+)"',
+                    r"'visitor_id':\s*'([^']+)'",
+                    r'visitor_id.*?([0-9.]+)',
+                    r'UniversalSearchNuxt_vt.*?(oauth2v2_[a-f0-9]{32})',
+                    r'visitorId.*?([0-9.]+)'
+                ]
                 
-            except Exception as e:
-                print(f"GraphQL extraction failed for {extraction_url}: {e}")
-                continue
-        
-        return False
+                for pattern in script_patterns:
+                    matches = re.findall(pattern, html_content)
+                    for match in matches:
+                        if isinstance(match, tuple):
+                            match = match[0] if match[0] else match[1] if len(match) > 1 else None
+                        
+                        if not match:
+                            continue
+                            
+                        if 'oauth2v2_' in match:
+                            clean_token = match.strip('"\'')
+                            print(f"Found token in HTML: {clean_token[:20]}...")
+                            self.current_auth_token = clean_token
+                            self.visitor_topnav_gql_token = clean_token
+                            self.browser_cookies['UniversalSearchNuxt_vt'] = clean_token
+                            found_tokens = True
+                            
+                        elif match.replace('.', '').isdigit() and len(match) > 10:
+                            print(f"Found visitor_id in HTML: {match}")
+                            self.current_visitor_id = match
+                            self.base_headers['Vnd-Eo-Visitorid'] = match
+                            self.browser_cookies['visitor_id'] = match
+                            found_tokens = True
+                            
+                # Look for window.__INITIAL_STATE__ or similar
+                initial_state_pattern = r'window\.__INITIAL_STATE__\s*=\s*({.+?});'
+                initial_state_match = re.search(initial_state_pattern, html_content, re.DOTALL)
+                if initial_state_match:
+                    try:
+                        initial_state = json.loads(initial_state_match.group(1))
+                        # Look for tokens in the initial state
+                        def find_tokens_in_obj(obj, path=""):
+                            if isinstance(obj, dict):
+                                for key, value in obj.items():
+                                    current_path = f"{path}.{key}" if path else key
+                                    if isinstance(value, str) and 'oauth2v2_' in value:
+                                        print(f"Found token in initial state at {current_path}: {value[:20]}...")
+                                        self.current_auth_token = value
+                                        self.visitor_topnav_gql_token = value
+                                        self.browser_cookies['UniversalSearchNuxt_vt'] = value
+                                        return True
+                                    elif isinstance(value, (dict, list)):
+                                        if find_tokens_in_obj(value, current_path):
+                                            return True
+                            elif isinstance(obj, list):
+                                for i, item in enumerate(obj):
+                                    if find_tokens_in_obj(item, f"{path}[{i}]"):
+                                        return True
+                            return False
+                        
+                        if find_tokens_in_obj(initial_state):
+                            found_tokens = True
+                            
+                    except json.JSONDecodeError:
+                        pass
+                        
+            return found_tokens
+            
+        except Exception as e:
+            print(f"Error extracting tokens from response: {e}")
+            return False
 
-    def _extract_tokens_from_page(self):
-        """Extract visitor tokens from page with multiple fallback URLs"""
-        print("Extracting fresh tokens from pages...")
+    def _refresh_tokens(self):
+        """Enhanced token refresh with complete session bootstrap"""
+        print("Refreshing tokens due to authorization failure...")
         
-        # First try GraphQL endpoints
-        if self._extract_tokens_from_graphql():
+        # Method 1: Bootstrap completely fresh session
+        print("Method 1: Bootstrapping fresh session...")
+        if self._bootstrap_fresh_session():
+            print("Fresh session bootstrap successful!")
             return True
         
-        # Fallback to page scraping
-        for attempt, page_url in enumerate(self.FALLBACK_PAGE_URLS):
+        # Method 2: Extract from accessible pages
+        print("Method 2: Extracting from accessible pages...")
+        if self._extract_from_accessible_pages():
+            print("Page extraction successful!")
+            return True
+        
+        # Method 3: Try unauthenticated API endpoints
+        print("Method 3: Trying unauthenticated API endpoints...")
+        if self._try_unauthenticated_endpoints():
+            print("Unauthenticated endpoint extraction successful!")
+            return True
+        
+        # Method 4: Generate intelligent variations as last resort
+        print("Method 4: Generating intelligent token variations...")
+        return self._generate_intelligent_token_variations()
+
+    def _extract_from_accessible_pages(self):
+        """Extract tokens from pages that returned 200 status"""
+        print("Trying accessible page extraction...")
+        
+        accessible_urls = [
+            "https://www.upwork.com/nx/find-work/",
+            "https://www.upwork.com/",
+            "https://www.upwork.com/signup/",
+            "https://www.upwork.com/ab/",
+            "https://www.upwork.com/landing/"
+        ]
+        
+        for url in accessible_urls:
             try:
-                print(f"Attempting page extraction from: {page_url} (attempt {attempt + 1})")
+                print(f"Accessing: {url}")
                 
-                # Generate new session IDs for this request
-                self._generate_session_ids()
-                
-                # Vary the headers slightly for each attempt
-                headers_for_page = {
-                    "User-Agent": random.choice([
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-                    ]),
+                # Create clean headers for page access
+                page_headers = {
+                    "User-Agent": self.base_headers["User-Agent"],
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
                     "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -299,154 +453,88 @@ class UpworkScraper:
                     "Upgrade-Insecure-Requests": "1",
                     "Sec-Fetch-Dest": "document",
                     "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "none" if attempt == 0 else "same-origin",
+                    "Sec-Fetch-Site": "same-origin",
                     "Sec-Ch-Ua": self.base_headers["Sec-Ch-Ua"],
                     "Sec-Ch-Ua-Mobile": "?0",
                     "Sec-Ch-Ua-Platform": self.base_headers["Sec-Ch-Ua-Platform"],
-                    "Cache-Control": "max-age=0"
+                    "Cache-Control": "no-cache"
                 }
                 
-                # Add referer for non-first attempts
-                if attempt > 0:
-                    headers_for_page["Referer"] = self.FALLBACK_PAGE_URLS[0]
+                # Use minimal cookies for the request
+                minimal_cookies = {
+                    "country_code": "PK",
+                    "cookie_domain": ".upwork.com"
+                }
                 
                 response = self.scraper.get(
-                    page_url,
-                    headers=headers_for_page,
+                    url,
+                    headers=page_headers,
+                    cookies=minimal_cookies,
                     timeout=30
                 )
                 
-                print(f"Page extraction response: {response.status_code}")
+                print(f"Page response: {response.status_code}")
                 
                 if response.status_code == 200:
-                    # Extract tokens from cookies
-                    extracted_cookies = {}
-                    for cookie in response.cookies:
-                        extracted_cookies[cookie.name] = cookie.value
-
-                    # Extract visitor tokens from cookies
-                    visitor_token = (extracted_cookies.get('UniversalSearchNuxt_vt') or 
-                                   extracted_cookies.get('visitor_topnav_gql_token'))
-                    visitor_id = extracted_cookies.get('visitor_id')
-                    
-                    if visitor_token:
-                        print(f"Successfully extracted tokens from page:")
-                        print(f"   - Visitor ID: {visitor_id}")
-                        print(f"   - Auth Token: {visitor_token[:20]}...")
-                        
-                        # Update tokens
-                        self.current_visitor_id = visitor_id or self.current_visitor_id
-                        self.visitor_topnav_gql_token = visitor_token
-                        self.current_auth_token = visitor_token
-                        
-                        # Update the browser cookies with fresh tokens
-                        self.browser_cookies.update({
-                            'UniversalSearchNuxt_vt': visitor_token
-                        })
-                        
-                        if visitor_id:
-                            self.browser_cookies['visitor_id'] = visitor_id
-                            self.base_headers['Vnd-Eo-Visitorid'] = visitor_id
-                        
+                    if self._extract_tokens_from_response(response):
+                        print(f"Successfully extracted tokens from {url}")
                         return True
-                
-                # Add delay between page attempts
-                time.sleep(random.uniform(2, 5))
+                        
+                time.sleep(random.uniform(2, 4))
                 
             except Exception as e:
-                print(f"Page extraction failed for {page_url}: {e}")
+                print(f"Failed to extract from {url}: {e}")
                 continue
-        
+                
         return False
 
-    def _refresh_tokens(self):
-        """Enhanced token refresh with better error handling and multiple methods"""
-        print("Refreshing tokens due to authorization failure...")
+    def _try_unauthenticated_endpoints(self):
+        """Try unauthenticated API endpoints for token extraction"""
+        print("Trying unauthenticated endpoints...")
         
-        # Update dynamic cookies first
-        self._update_dynamic_cookies()
+        endpoints = [
+            "https://www.upwork.com/api/v4/visitor/stats",
+            "https://www.upwork.com/api/v4/visitor/config",
+            "https://www.upwork.com/api/visitor/bootstrap",
+            "https://www.upwork.com/api/health",
+            "https://www.upwork.com/nx/api/visitor/session"
+        ]
         
-        # Method 1: Try extracting fresh tokens from multiple sources
-        print("Method 1: Extracting fresh tokens...")
-        success = self._extract_tokens_from_page()
-        
-        if success:
-            print("Token extraction successful!")
-            return True
-        
-        # Method 2: Try alternative refresh methods
-        print("Method 2: Alternative token refresh...")
-        success = self._alternative_token_refresh()
-        
-        if success:
-            print("Alternative refresh successful!")
-            return True
-        
-        # Method 3: Generate intelligent token variations
-        print("Method 3: Generating intelligent token variations...")
-        return self._generate_intelligent_token_variations()
-
-    def _alternative_token_refresh(self):
-        """Alternative token refresh methods"""
-        try:
-            print("Attempting alternative token refresh methods...")
-            
-            # Try multiple lightweight endpoints
-            lightweight_endpoints = [
-                "https://www.upwork.com/ab/account-security/api/health",
-                "https://www.upwork.com/api/graphql/v1?alias=healthCheck",
-                "https://www.upwork.com/nx/api/v1/user/me"
-            ]
-            
-            for endpoint in lightweight_endpoints:
-                try:
-                    health_headers = self.base_headers.copy()
-                    health_headers.update({
-                        "Accept": "application/json, text/plain, */*",
-                        "Referer": "https://www.upwork.com/nx/search/jobs/",
-                        "X-Requested-With": "XMLHttpRequest"
-                    })
-                    
-                    # Remove auth header for health checks
-                    if 'Authorization' in health_headers:
-                        del health_headers['Authorization']
-                    
-                    response = self.scraper.get(
-                        endpoint,
-                        headers=health_headers,
-                        cookies=self.browser_cookies,
-                        timeout=15
-                    )
-                    
-                    if response.status_code == 200 and response.cookies:
-                        # Extract new tokens from cookies
-                        new_cookies = {cookie.name: cookie.value for cookie in response.cookies}
-                        
-                        # Update any token-related cookies
-                        for cookie_name, cookie_value in new_cookies.items():
-                            if any(keyword in cookie_name.lower() for keyword in ['token', 'visitor', 'auth', 'oauth']):
-                                self.browser_cookies[cookie_name] = cookie_value
-                                if 'visitor_id' in cookie_name:
-                                    self.current_visitor_id = cookie_value
-                                    self.base_headers['Vnd-Eo-Visitorid'] = cookie_value
-                                elif any(token_key in cookie_name.lower() for token_key in ['token', 'oauth']):
-                                    self.current_auth_token = cookie_value
-                                    self.visitor_topnav_gql_token = cookie_value
-
-                        print(f"Alternative token refresh successful from {endpoint}")
+        for endpoint in endpoints:
+            try:
+                print(f"Trying endpoint: {endpoint}")
+                
+                api_headers = {
+                    "User-Agent": self.base_headers["User-Agent"],
+                    "Accept": "application/json, */*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
+                    "Connection": "keep-alive",
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-origin"
+                }
+                
+                response = self.scraper.get(
+                    endpoint,
+                    headers=api_headers,
+                    timeout=15
+                )
+                
+                print(f"Endpoint {endpoint} response: {response.status_code}")
+                
+                if response.status_code == 200:
+                    if self._extract_tokens_from_response(response):
+                        print(f"Successfully extracted tokens from {endpoint}")
                         return True
                         
-                    time.sleep(random.uniform(1, 3))
-                    
-                except Exception as e:
-                    print(f"Alternative endpoint {endpoint} failed: {e}")
-                    continue
-            
-            return False
-            
-        except Exception as e:
-            print(f"Alternative refresh failed: {e}")
-            return False
+                time.sleep(random.uniform(1, 3))
+                
+            except Exception as e:
+                print(f"Failed endpoint {endpoint}: {e}")
+                continue
+                
+        return False
 
     def _generate_intelligent_token_variations(self):
         """Generate intelligent variations of existing tokens using multiple algorithms"""
@@ -547,6 +635,8 @@ class UpworkScraper:
             
         return headers
 
+    # ... rest of the methods remain the same ...
+    
     def fetch_jobs(self, query="developer", limit=10, delay=True):
         """
         Fetch jobs with automatic token refresh on auth failure using visitor job search API
