@@ -6,3 +6,4 @@ discord.py
 sqlalchemy
 psycopg2-binary   # PostgreSQL
 python-dotenv
+webdriver-manager

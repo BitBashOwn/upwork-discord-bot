@@ -5,13 +5,26 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
+DISCORD_CHANNEL_ID2 = int(os.getenv("DISCORD_CHANNEL_ID2"))
+
 
 POSTGRES_URL = os.getenv("POSTGRES_URL")
 UPWORK_EMAIL = os.getenv("UPWORK_EMAIL")
 UPWORK_PASSWORD = os.getenv("UPWORK_PASSWORD")
-
 # 2captcha API key (add to your .env file)
 CAPTCHA_API_KEY = os.getenv("TWO_CAPTCHA_API_KEY")
+
+# Gemini AI config for BHW scraper
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL")
+
+# BHW Scraper config
+BHW_SCRAPER_PAGES = int(os.getenv("BHW_SCRAPER_PAGES", 1))
+BHW_SCRAPER_DELAY = int(os.getenv("BHW_SCRAPER_DELAY", 2))
+BHW_DETAIL_DELAY = int(os.getenv("BHW_DETAIL_DELAY", 2))
+BHW_MAX_RETRIES = int(os.getenv("BHW_MAX_RETRIES", 2))
+BHW_RETRY_DELAY = int(os.getenv("BHW_RETRY_DELAY", 2))
+BHW_FILTER_TODAY = os.getenv("BHW_FILTER_TODAY", "0") == "1"
 
 PROXIES = [
     "http://mvpidhan:bt1per0s2glt@64.137.96.74:6641",
