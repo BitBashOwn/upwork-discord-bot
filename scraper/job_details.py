@@ -1,8 +1,7 @@
 # scraper/job_details.py
 """
-Handles job details fetching and parsing for UpworkScraper.
+Handles job details fetching and parsing for UpworkScraper with auto auth refresh.
 """
-
 
 import json
 import os
@@ -10,88 +9,235 @@ import time
 import random
 import re
 
-def fetch_job_details(scraper, job_id):
+# Global lock to prevent multiple simultaneous auth refreshes
+_auth_refresh_lock = None
+_last_auth_refresh_time = 0
+AUTH_REFRESH_COOLDOWN = 300  # 5 minutes between refreshes
+
+def _get_auth_lock():
+    """Get or create the auth refresh lock"""
+    global _auth_refresh_lock
+    if _auth_refresh_lock is None:
+        import threading
+        _auth_refresh_lock = threading.Lock()
+    return _auth_refresh_lock
+
+def refresh_auth_credentials():
+    """Refresh authentication by running the auth bot in a separate thread"""
+    global _last_auth_refresh_time
+    
+    lock = _get_auth_lock()
+    
+    with lock:
+        current_time = time.time()
+        
+        # Check cooldown to prevent spam refreshing
+        if current_time - _last_auth_refresh_time < AUTH_REFRESH_COOLDOWN:
+            print(f"[Job Details] Skipping auth refresh - last refresh was {int(current_time - _last_auth_refresh_time)}s ago")
+            return False
+        
+        print("[Job Details] ⚠️ 401 Error detected - refreshing authentication...")
+        
+        try:
+            # Import the auth bot module
+            import sys
+            auth_bot_path = os.path.join(os.path.dirname(__file__),'authbot.py')
+            
+            if not os.path.exists(auth_bot_path):
+                print(f"[Job Details] ❌ Auth bot not found at: {auth_bot_path}")
+                return False
+            
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("authbot", auth_bot_path)
+            authbot = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(authbot)
+            
+            # Run the auth refresh in a separate thread to avoid event loop conflicts
+            print("[Job Details] Running auth bot in separate thread...")
+            import concurrent.futures
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(authbot.get_upwork_headers)
+                success = future.result(timeout=120)  # 2 minute timeout
+            
+            if success:
+                _last_auth_refresh_time = current_time
+                print("[Job Details] ✅ Authentication refreshed successfully!")
+                time.sleep(2)  # Wait for files to be written
+                return True
+            else:
+                print("[Job Details] ❌ Authentication refresh failed!")
+                return False
+                
+        except concurrent.futures.TimeoutError:
+            print("[Job Details] ❌ Auth refresh timed out!")
+            return False
+        except Exception as e:
+            print(f"[Job Details] ❌ Error during auth refresh: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+def fetch_job_details(scraper, job_id, max_retries=2):
+    """
+    Fetch job details with automatic auth refresh on 401 errors
+    """
     print(f"Fetching detailed information for job ID: {job_id}")
     clean_job_id = str(job_id).lstrip("~")
     formatted_job_id = f"~{clean_job_id}"
     print(f"Using formatted job ID for API: {formatted_job_id}")
 
-    # Use job_details_headers.json and job_details_cookies.json if they exist, else fallback to headers_upwork.json and upwork_cookies.json
-    headers_file = os.path.join(os.path.dirname(__file__), '../job_details_headers.json')
-    cookies_file = os.path.join(os.path.dirname(__file__), '../job_details_cookies.json')
-    if not os.path.exists(headers_file):
-        headers_file = os.path.join(os.path.dirname(__file__), '../headers_upwork.json')
-    if not os.path.exists(cookies_file):
-        cookies_file = os.path.join(os.path.dirname(__file__), '../upwork_cookies.json')
-
-    # Load headers
-    if not os.path.exists(headers_file):
-        raise FileNotFoundError(f"Headers file not found: {headers_file}")
-    with open(headers_file, "r") as f:
-        headers = json.load(f)
-        print("[✓] Loaded job details headers from file.")
-
-    # Load cookies
-    if not os.path.exists(cookies_file):
-        print(f"[!] Cookies file not found: {cookies_file}. Using no cookies.")
-        cookies = {}
-    else:
+    for attempt in range(max_retries):
         try:
-            with open(cookies_file, "r") as f:
-                cookies = json.load(f)
-                print("[✓] Loaded job details cookies from file.")
-                # Ensure all cookie values are strings
-                cookies = {k: str(v) for k, v in cookies.items()}
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"[!] Error loading cookies: {e}. Using no cookies.")
-            cookies = {}
+            # Load fresh headers and cookies for each attempt
+            headers_file = os.path.join(os.path.dirname(__file__), 'job_details_headers.json')
+            cookies_file = os.path.join(os.path.dirname(__file__), 'job_details_cookies.json')
+            
+            if not os.path.exists(headers_file):
+                headers_file = os.path.join(os.path.dirname(__file__), 'headers_upwork.json')
+            if not os.path.exists(cookies_file):
+                cookies_file = os.path.join(os.path.dirname(__file__), 'upwork_cookies.json')
 
-    # Build the payload (minimal public query)
-    payload = get_simplified_job_details_query(formatted_job_id)
+            # Load headers
+            if not os.path.exists(headers_file):
+                raise FileNotFoundError(f"Headers file not found: {headers_file}")
+            
+            with open(headers_file, "r") as f:
+                headers = json.load(f)
+                print(f"[Job Details] Loaded headers from {headers_file}")
 
-    # Make the request (use cloudscraper if available, else requests)
-    try:
-        import cloudscraper
-        session = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
-    except ImportError:
-        import requests
-        session = requests.Session()
+            # Load cookies
+            if not os.path.exists(cookies_file):
+                print(f"[Job Details] Cookies file not found: {cookies_file}. Using no cookies.")
+                cookies = {}
+            else:
+                try:
+                    with open(cookies_file, "r") as f:
+                        cookies = json.load(f)
+                        print(f"[Job Details] Loaded cookies from {cookies_file}")
+                        cookies = {k: str(v) for k, v in cookies.items()}
+                except (json.JSONDecodeError, Exception) as e:
+                    print(f"[Job Details] Error loading cookies: {e}. Using no cookies.")
+                    cookies = {}
 
-    url = "https://www.upwork.com/api/graphql/v1?alias=gql-query-get-visitor-job-details"
-    print(f"Making job details API request to: {url}")
-    resp = session.post(
-        url,
-        headers=headers,
-        cookies=cookies,
-        json=payload
-    )
-    print(f"Job Details Response Status: {resp.status_code}")
-    if resp.status_code != 200:
-        print(f"Job details API request failed: {resp.status_code}")
-        print(f"Response text: {resp.text[:500]}")
-        return {
-            "id": job_id,
-            "title": "Job details temporarily unavailable",
-            "description": "Unable to fetch complete job details. The API may require authentication or the job may no longer be available.",
-            "budget": "Not available",
-            "status": "Unknown",
-            "posted_on": "Unknown"
-        }
-    try:
-        data = resp.json()
-        print(f"Job details JSON parsed successfully")
-        if "errors" in data:
-            print(f"GraphQL errors in job details:")
-            for error in data["errors"]:
-                error_msg = error.get('message', 'Unknown error')
-                print(f"   - {error_msg}")
-            if "data" not in data or not data["data"]:
+            # Build the payload
+            payload = get_simplified_job_details_query(formatted_job_id)
+
+            # Make the request
+            try:
+                import cloudscraper
+                session = cloudscraper.create_scraper(
+                    browser={"browser": "chrome", "platform": "windows", "mobile": False}
+                )
+            except ImportError:
+                import requests
+                session = requests.Session()
+
+            url = "https://www.upwork.com/api/graphql/v1?alias=gql-query-get-visitor-job-details"
+            print(f"[Job Details] Making API request (attempt {attempt + 1}/{max_retries})")
+            
+            resp = session.post(
+                url,
+                headers=headers,
+                cookies=cookies,
+                json=payload,
+                timeout=30
+            )
+            
+            print(f"[Job Details] Response Status: {resp.status_code}")
+            
+            # Handle 401 - Authentication Error
+            if resp.status_code == 401:
+                print(f"[Job Details] ⚠️ 401 Authentication Error (attempt {attempt + 1}/{max_retries})")
+                
+                if attempt < max_retries - 1:  # Don't refresh on last attempt
+                    print("[Job Details] Attempting to refresh authentication...")
+                    
+                    refresh_success = refresh_auth_credentials()
+                    
+                    if refresh_success:
+                        print("[Job Details] ✅ Auth refreshed, retrying job details fetch...")
+                        time.sleep(3)  # Wait before retry
+                        continue  # Retry with new credentials
+                    else:
+                        print("[Job Details] ❌ Auth refresh failed")
+                        # Continue to fallback response
+                else:
+                    print("[Job Details] ❌ Max retries reached, cannot refresh auth again")
+                
+                # Return fallback response
+                return {
+                    "id": job_id,
+                    "title": "Authentication Required",
+                    "description": "Unable to fetch job details due to authentication error. Please refresh credentials.",
+                    "budget": "Not available",
+                    "status": "Unknown",
+                    "posted_on": "Unknown"
+                }
+            
+            # Handle other non-200 responses
+            if resp.status_code != 200:
+                print(f"[Job Details] API request failed: {resp.status_code}")
+                print(f"[Job Details] Response text: {resp.text[:500]}")
+                
+                if attempt < max_retries - 1:
+                    print(f"[Job Details] Retrying...")
+                    time.sleep(2)
+                    continue
+                
+                return {
+                    "id": job_id,
+                    "title": "Job details temporarily unavailable",
+                    "description": f"API request failed with status {resp.status_code}",
+                    "budget": "Not available",
+                    "status": "Unknown",
+                    "posted_on": "Unknown"
+                }
+            
+            # Parse successful response
+            try:
+                data = resp.json()
+                print(f"[Job Details] JSON parsed successfully")
+                
+                if "errors" in data:
+                    print(f"[Job Details] GraphQL errors found:")
+                    for error in data["errors"]:
+                        error_msg = error.get('message', 'Unknown error')
+                        print(f"   - {error_msg}")
+                    
+                    if "data" not in data or not data["data"]:
+                        return {
+                            "id": job_id,
+                            "title": "No title",
+                            "description": "No description available",
+                            "budget": "Not specified",
+                            "currency_code": "USD",
+                            "total_applicants": 0,
+                            "total_hired": 0,
+                            "skills": [],
+                            "posted_on": "Unknown",
+                            "category": ""
+                        }
+                
+                job_details = extract_job_details_from_response(data)
+                
+                if job_details:
+                    print(f"[Job Details] ✅ Successfully fetched detailed job information")
+                    return job_details
+                else:
+                    print(f"[Job Details] ⚠️ No job details found in response")
+                    return job_details
+                    
+            except json.JSONDecodeError as e:
+                print(f"[Job Details] ❌ Failed to parse JSON: {e}")
+                print(f"[Job Details] Response text: {resp.text[:500]}")
+                
+                if attempt < max_retries - 1:
+                    continue
+                
                 return {
                     "id": job_id,
                     "title": "No title",
-                    "description": "No description available",
+                    "description": f"Parse error: {e}",
                     "budget": "Not specified",
                     "currency_code": "USD",
                     "total_applicants": 0,
@@ -100,28 +246,37 @@ def fetch_job_details(scraper, job_id):
                     "posted_on": "Unknown",
                     "category": ""
                 }
-        job_details = extract_job_details_from_response(data)
-        if job_details:
-            print(f"Successfully fetched detailed job information")
-            return job_details
-        else:
-            print(f"No job details found in response")
-        return job_details
-    except Exception as e:
-        print(f"Failed to parse job details JSON: {e}")
-        print(f"Response text: {resp.text[:500]}")
-        return {
-            "id": job_id,
-            "title": "No title",
-            "description": f"No details available. Error: {e}",
-            "budget": "Not specified",
-            "currency_code": "USD",
-            "total_applicants": 0,
-            "total_hired": 0,
-            "skills": [],
-            "posted_on": "Unknown",
-            "category": ""
-        }
+                
+        except Exception as e:
+            print(f"[Job Details] ❌ Request exception: {e}")
+            
+            if attempt < max_retries - 1:
+                print(f"[Job Details] Retrying after exception...")
+                time.sleep(2)
+                continue
+            
+            return {
+                "id": job_id,
+                "title": "No title",
+                "description": f"Error: {e}",
+                "budget": "Not specified",
+                "currency_code": "USD",
+                "total_applicants": 0,
+                "total_hired": 0,
+                "skills": [],
+                "posted_on": "Unknown",
+                "category": ""
+            }
+    
+    # Should never reach here, but just in case
+    return {
+        "id": job_id,
+        "title": "Error",
+        "description": "Max retries exceeded",
+        "budget": "Not available",
+        "status": "Unknown",
+        "posted_on": "Unknown"
+    }
 
 def get_simplified_job_details_query(job_id):
     return {
@@ -132,158 +287,16 @@ def get_simplified_job_details_query(job_id):
         }
     }
 
-def fallback_job_details(scraper, job_id):
-    print("Trying fallback job details method...")
-    clean_job_id = str(job_id).lstrip("~")
-    id_formats = [
-        f"~{clean_job_id}",
-        clean_job_id,
-        f"~0{clean_job_id}",
-    ]
-    for id_format in id_formats:
-        print(f"Trying ID format: {id_format}")
-        detailed_query = get_simplified_job_details_query(id_format)
-        try:
-            response = scraper.scraper.post(
-                "https://www.upwork.com/api/graphql/v1",
-                headers=scraper._get_current_headers(),
-                cookies=scraper._get_current_cookies(),
-                json=detailed_query,
-                timeout=30
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if "data" in data and data["data"]:
-                    print("Fallback method successful!")
-                    return parse_fallback_response(data["data"])
-        except Exception as e:
-            print(f"Fallback attempt failed: {e}")
-            continue
-    return {
-        "id": job_id,
-        "title": "Job details temporarily unavailable",
-        "description": "Unable to fetch complete job details. The API may require authentication or the job may no longer be available.",
-        "budget": "Not available",
-        "status": "Unknown",
-        "posted_on": "Unknown"
-    }
-
-def parse_fallback_response(data):
-    jobs = data.get("visitorJobSearch", {}).get("jobs", [])
-    if not jobs:
-        return {
-            "id": "",
-            "title": "No title",
-            "description": "No description available",
-            "budget": "Not specified",
-            "currency_code": "USD",
-            "total_applicants": 0,
-            "total_hired": 0,
-            "skills": [],
-            "posted_on": "Unknown",
-            "category": ""
-        }
-    job = jobs[0]
-    return {
-        "id": job.get("id", ""),
-        "title": job.get("title", "No title"),
-        "description": job.get("description", "No description available"),
-        "budget": job.get("budget", {}).get("amount", "Not specified"),
-        "currency_code": job.get("budget", {}).get("currencyCode", "USD"),
-        "total_applicants": job.get("clientActivity", {}).get("totalApplicants", 0),
-        "total_hired": job.get("clientActivity", {}).get("totalHired", 0),
-        "skills": [s.get("name", "") for s in job.get("skills", [])],
-        "posted_on": job.get("createdOn", "Unknown"),
-        "category": job.get("category", {}).get("name", "")
-    }
-
-def make_job_details_request(scraper, payload, job_id, headers=None, cookies=None):
-    """
-    Make a job details request using fresh headers and cookies. If headers/cookies are not provided, generate them.
-    """
-    scraper.last_gql_errors = None
-    max_retries = 3
-    retry_count = 0
-    while retry_count < max_retries:
-        try:
-            # Always use fresh session IDs and headers/cookies if not provided
-            if headers is None:
-                scraper._generate_session_ids()
-                headers = scraper._get_current_headers()
-            if cookies is None:
-                cookies = scraper._get_current_cookies()
-            headers = headers.copy()
-            headers['Referer'] = f"https://www.upwork.com/nx/search/jobs/details/{job_id}?nbs=1&q=developer&pageTitle=Job%20Details&_modalInfo=%5B%7B%22navType%22%3A%22slider%22,%22title%22%3A%22Job%20Details%22,%22modalId%22%3A%221758699386529%22%7D%5D"
-            print(f"Making job details API request to: {scraper.JOB_DETAILS_URL}")
-            print(f"Payload: {json.dumps(payload, indent=2)[:500]}...")
-            response = scraper.scraper.post(
-                scraper.JOB_DETAILS_URL,
-                headers=headers,
-                cookies=cookies,
-                json=payload,
-            )
-            print(f"Job Details Response Status: {response.status_code}")
-            if response.status_code in [401, 403]:
-                print(f"Authentication error detected, refreshing tokens...")
-                if retry_count < max_retries - 1:
-                    success = scraper._refresh_tokens()
-                    if success:
-                        retry_count += 1
-                        print(f"Retrying job details request (attempt {retry_count + 1})")
-                        time.sleep(random.uniform(3, 6))
-                        # Always use fresh headers/cookies after refresh
-                        headers = scraper._get_current_headers()
-                        cookies = scraper._get_current_cookies()
-                        continue
-                    else:
-                        print("Token refresh failed")
-                        break
-                else:
-                    print("Max retries reached for job details")
-                    break
-            if response.status_code != 200:
-                print(f"Job details API request failed: {response.status_code}")
-                print(f"Response text: {response.text[:500]}")
-                return None
-            try:
-                data = response.json()
-                print(f"Job details JSON parsed successfully")
-                if "errors" in data:
-                    print(f"GraphQL errors in job details:")
-                    for error in data["errors"]:
-                        scraper.last_gql_errors = data["errors"]
-                        error_msg = error.get('message', 'Unknown error')
-                        print(f"   - {error_msg}")
-                    if "data" not in data or not data["data"]:
-                        return None
-                job_details = extract_job_details_from_response(data)
-                if job_details:
-                    print(f"Successfully fetched detailed job information")
-                    return job_details
-                else:
-                    print(f"No job details found in response")
-                return job_details
-            except json.JSONDecodeError as e:
-                print(f"Failed to parse job details JSON: {e}")
-                print(f"Response text: {response.text[:500]}")
-                return None
-        except Exception as e:
-            print(f"Job details request failed: {e}")
-            time.sleep(random.uniform(2, 5))
-            return None
-    return None
-
 def extract_job_details_from_response(data):
     from datetime import datetime
     try:
         job_pub_details = data.get("data", {}).get("jobPubDetails", {})
         if not job_pub_details:
-            print("No usable jobPubDetails found in response. Raw data:")
-            print(json.dumps(data, indent=2)[:2000])
+            print("[Job Details] No jobPubDetails found in response")
             return {
                 "id": data.get("data", {}).get("id") or data.get("id", ""),
                 "title": data.get("data", {}).get("title") or data.get("title", "No title"),
-                "description": "No details available. (Some fields require authentication.)"
+                "description": "No details available."
             }
         
         opening = job_pub_details.get("opening", {})
@@ -304,33 +317,14 @@ def extract_job_details_from_response(data):
         buyer_company = buyer.get("company", {})
         buyer_jobs = buyer.get("jobs", {})
         
-        # FIX: Improved handling of total_charges
+        # Handle total_charges
         total_charges = buyer_stats.get("totalCharges", {})
-        print(f"DEBUG: buyer_stats = {buyer_stats}")
-        print(f"DEBUG: total_charges = {total_charges}")
-        
         client_total_spent_value = None
         if total_charges and isinstance(total_charges, dict):
             client_total_spent_value = total_charges.get("amount")
-            print(f"DEBUG: client_total_spent_value from totalCharges.amount = {client_total_spent_value}")
         
-        # Alternative: Sometimes the total spending might be in a different field
-        if client_total_spent_value is None:
-            # Try alternative field paths
-            alternative_paths = [
-                buyer_stats.get("totalSpent"),
-                buyer_stats.get("totalPayments"),
-                buyer.get("totalSpent"),
-                buyer.get("totalCharges", {}).get("amount") if isinstance(buyer.get("totalCharges"), dict) else None
-            ]
-            for alt_value in alternative_paths:
-                if alt_value is not None:
-                    client_total_spent_value = alt_value
-                    print(f"DEBUG: Found alternative client_total_spent_value = {alt_value}")
-                    break
-        
+        # Extract skills
         skills = []
-        # Safely handle None for additionalSkills and ontologySkills
         additional_skills = sands_data.get("additionalSkills") or []
         for skill in additional_skills:
             if skill and skill.get("prefLabel"):
@@ -340,6 +334,7 @@ def extract_job_details_from_response(data):
             if skill and skill.get("prefLabel"):
                 skills.append(skill["prefLabel"])
         
+        # Format budget
         budget_display = "Not specified"
         hourly_min = extended_budget.get("hourlyBudgetMin")
         hourly_max = extended_budget.get("hourlyBudgetMax")
@@ -355,12 +350,14 @@ def extract_job_details_from_response(data):
         except Exception:
             pass
         
+        # Format location
         client_location_str = "Not specified"
         if buyer_location.get("city") and buyer_location.get("country"):
             client_location_str = f"{buyer_location['city']}, {buyer_location['country']}"
         elif buyer_location.get("country"):
             client_location_str = buyer_location['country']
         
+        # Format posted time
         posted_on = opening.get("postedOn", "")
         if posted_on:
             try:
@@ -408,7 +405,7 @@ def extract_job_details_from_response(data):
             "client_feedback_count": buyer_stats.get("feedbackCount"),
             "client_rating": buyer_stats.get("score"),
             "client_total_jobs": buyer_stats.get("totalJobsWithHires"),
-            "client_total_spent": client_total_spent_value,  # FIX: Use the properly extracted value
+            "client_total_spent": client_total_spent_value,
             "client_open_jobs": buyer_jobs.get("openCount"),
             "client_industry": buyer_company.get("profile", {}).get("industry") if buyer_company.get("profile") else None,
             "client_company_size": buyer_company.get("profile", {}).get("size") if buyer_company.get("profile") else None,
@@ -427,15 +424,14 @@ def extract_job_details_from_response(data):
             "similar_jobs": similar_jobs[:5] if similar_jobs else []
         }
         
-        print(f"DEBUG: Final client_total_spent in job_details = {job_details['client_total_spent']}")
         return job_details
         
     except Exception as e:
-        print(f"Error extracting job details: {e}")
-        print("Raw data for debugging:")
-        print(json.dumps(data, indent=2)[:2000])
+        print(f"[Job Details] ❌ Error extracting job details: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "id": data.get("data", {}).get("id") or data.get("id", ""),
             "title": data.get("data", {}).get("title") or data.get("title", "No title"),
-            "description": f"No details available. Error: {e} (Some fields require authentication.)"
+            "description": f"Error: {e}"
         }

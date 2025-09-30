@@ -44,169 +44,531 @@ def is_job_very_recent(created_datetime, max_minutes=5):
     except Exception as e:
         print(f"[Advanced Search] Error checking job recency: {e}")
         return False
-
-async def post_job_with_auto_details(channel, job, msg_content, search_context=""):
-    """Posts a job message and automatically creates a thread with detailed job info"""
-    try:
-        # Send the main job message
-        job_message = await channel.send(msg_content)
-        
-        # Create thread for job details
-        thread_name = f"Details: {job.get('title', 'Job')}"[:100]
+async def fetch_and_build_job_message(job, search_context=""):
+    """
+    Fetch job details and build a complete message with all information.
+    Returns the complete message string or None if auth fails.
+    """
+    job_id = job.get('id') or job.get('ciphertext')
+    job_url = build_job_url(job_id)
+    skills = job.get('skills', [])
+    skill_display = " • ".join(skills[:8])
+    if len(skills) > 8:
+        skill_display += f" • +{len(skills) - 8} more"
+    
+    # Get formatted posting time for display
+    posted_time = format_posted_time(job.get('createdDateTime'))
+    
+    # Build basic job message
+    job_msg = (
+        "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
+        f"(V2)🚨 **{job['title']}** \n"
+        f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
+        f"\n"
+        f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
+        f"⚡ **Posted**: {posted_time} \n"
+        f"🕒 **Sent to Discord at:** {datetime.now().strftime('%H:%M')} UTC\n"
+    )
+    if skills:
+        job_msg += f"🎯 **Key Skills:** `{skill_display}`\n"
+    job_msg += (
+        f"🌐 [Open Job]({job_url})\n"
+        f"📊 **Found by keyword:** `{search_context}` \n"
+    )
+    
+    # FETCH JOB DETAILS (with auto auth refresh)
+    job_details_response = None
+    if job_id:
         try:
-            thread = await job_message.create_thread(
-                name=thread_name,
-                auto_archive_duration=60
+            print(f"[Pre-fetch] Fetching details for job ID: {job_id}")
+            
+            # This will auto-refresh auth on 401 errors
+            job_details_response = await asyncio.wait_for(
+                scraper.fetch_job_details(job_id),
+                timeout=45
             )
             
-            # Fetch and post job details in thread
-            job_id = job.get('id') or job.get('ciphertext')
-            if job_id:
-                try:
-                    print(f"Fetching details for job ID: {job_id}")
-                    job_details_response = await asyncio.wait_for(
-                        scraper.fetch_job_details(job_id),
-                        timeout=30
-                    )
-                    
-                    if job_details_response:
-                        if isinstance(job_details_response, str):
-                            # Handle string response (raw text)
-                            chunks = [job_details_response[i:i+2000] for i in range(0, len(job_details_response), 2000)]
-                            await thread.send("📋 **Detailed Job Information:**")
-                            for chunk in chunks:
-                                await thread.send(chunk)
-                                await asyncio.sleep(0.5)
-                        else:
-                            # Handle structured response (dictionary)
-                            embed = build_job_details_embed(job_details_response)
-                            await thread.send("📋 **Detailed Job Information:**", embed=embed)
-                            
-                            # Add additional structured info
-                            if job_details_response.get('skills'):
-                                skills_text = " • ".join(job_details_response['skills'])
-                                await thread.send(f"🎯 **All Required Skills:**\n{skills_text}")
-                                
-                            if job_details_response.get('tools'):
-                                tools_text = " • ".join(job_details_response['tools'])
-                                await thread.send(f"🛠️ **Tools & Platforms:**\n{tools_text}")
-                                
-                    else:
-                        await thread.send("❌ Could not fetch detailed job information at this time.")
-                        
-                except asyncio.TimeoutError:
-                    await thread.send("⏰ Job details request timed out. Please check the job link directly.")
-                except Exception as detail_error:
-                    print(f"Error fetching job details: {detail_error}")
-                    await thread.send(f"❌ Error fetching job details: {str(detail_error)[:100]}")
-            else:
-                await thread.send("❌ Could not determine job ID for detailed information.")
+            if job_details_response:
+                # Check if response indicates auth failure
+                if isinstance(job_details_response, dict):
+                    title = job_details_response.get('title', '')
+                    if 'Authentication Required' in title or 'authentication error' in title.lower():
+                        print(f"[Pre-fetch] ⚠️ Job details fetch failed due to auth - skipping this job")
+                        return None  # Signal to skip this job
                 
-        except discord.Forbidden:
-            print(f"Cannot create thread for job: {job.get('title', 'Unknown')} - missing permissions")
-        except discord.HTTPException as e:
-            print(f"Thread creation failed: {e}")
-            
-    except Exception as e:
-        print(f"Error posting job with auto details: {e}")
-        # Fallback: just send the message without thread
-        await channel.send(msg_content)
-
-async def run_advanced_job_searches():
-    await bot.wait_until_ready()
-    print("[Advanced Search] Starting advanced job searches...")
+                print(f"[Pre-fetch] ✅ Job details fetched successfully")
+            else:
+                print(f"[Pre-fetch] ⚠️ No job details returned")
+                
+        except asyncio.TimeoutError:
+            print(f"[Pre-fetch] ⏰ Job details request timed out")
+        except Exception as detail_error:
+            print(f"[Pre-fetch] ❌ Error fetching job details: {detail_error}")
     
-    for search in ADVANCED_JOB_SEARCHES:
+    # ADD DETAILED INFORMATION TO THE MESSAGE
+    if job_details_response and isinstance(job_details_response, dict):
+        job_msg += "\n\n**📋 DETAILED JOB INFORMATION:**\n"
+        
+        # Project Details Section
+        job_msg += "```"
+        if job_details_response.get('job_type'):
+            job_msg += f"\n💼 Job Type: {job_details_response['job_type']}"
+        if job_details_response.get('engagement_duration'):
+            job_msg += f"\n⏳ Duration: {job_details_response['engagement_duration']}"
+        # if job_details_response.get('category'):
+        #     job_msg += f"\n📂 Category: {job_details_response['category']}"
+        job_msg += "\n```\n"
+        
+        # Client Information Section
+        job_msg += "**👤 CLIENT INFORMATION:**\n```"
+        if job_details_response.get('client_location'):
+            job_msg += f"\n📍 Location: {job_details_response['client_location']}"
+        
+        # Handle client_total_spent properly
+        client_total_spent = job_details_response.get('client_total_spent')
+        if client_total_spent is not None and client_total_spent != "":
+            try:
+                spent_amount = float(client_total_spent)
+                if spent_amount > 0:
+                    spent_display = f"${spent_amount:,.0f}"
+                else:
+                    spent_display = "$0"
+            except (ValueError, TypeError):
+                spent_display = str(client_total_spent)
+        else:
+            spent_display = "Not disclosed"
+        job_msg += f"\n💸 Total Spent: {spent_display}"
+        
+        payment_verified = job_details_response.get('payment_verified', False)
+        job_msg += f"\n{'✅' if payment_verified else '❌'} Payment Verified: {'Yes' if payment_verified else 'No'}"
+        job_msg += "\n```"
+    
+    return job_msg
+
+
+async def process_single_search(search):
+    """Process a single job search independently and asynchronously"""
+    try:
         channel = bot.get_channel(search["channel_id"])
         if channel is None:
             print(f"[Advanced Search] Channel not found for {search['category']} - {search['keyword']} (ID: {search['channel_id']})")
-            continue
-            
-        try:
-            print(f"[Advanced Search] Searching for: {search['keyword']} in category: {search['category']}")
-            jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
-            
-            if not jobs:
-                print(f"[Advanced Search] No jobs found for keyword: {search['keyword']}")
-                continue
+            return
+        
+        print(f"[Advanced Search] Searching for: {search['keyword']} in category: {search['category']}")
+        
+        # Fetch jobs for this specific keyword
+        jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
+        
+        if not jobs:
+            print(f"[Advanced Search] No jobs found for keyword: {search['keyword']}")
+            return
 
-            # Filter for very recent jobs first (posted within last 5 minutes)
-            recent_jobs = []
-            for job in jobs:
-                if is_job_very_recent(job.get('createdDateTime'), max_minutes=5):
-                    recent_jobs.append(job)
+        # Filter for very recent jobs (posted within last 60 seconds)
+        recent_jobs = []
+        for job in jobs:
+            if is_job_very_recent(job.get('createdDateTime'), max_minutes=5):
+                recent_jobs.append(job)
+        
+        if not recent_jobs:
+            print(f"[Advanced Search] No recent jobs (within 60 seconds) found for keyword: {search['keyword']}")
+            return
+        
+        print(f"[Advanced Search] Found {len(recent_jobs)} recent jobs for keyword: {search['keyword']}")
+
+        # FILTER FOR KEYWORD RELEVANCE
+        keyword_lower = search['keyword'].lower()
+        keyword_words = set(keyword_lower.replace('-', ' ').split())
+        
+        relevant_jobs = []
+        for job in recent_jobs:
+            title = job.get('title', '').lower()
+            description = job.get('description', '').lower()
+            skills = [s.lower() for s in job.get('skills', [])]
+            skills_text = ' '.join(skills)
+            searchable_text = f"{title} {description} {skills_text}"
             
-            # If no very recent jobs, skip this search
-            if not recent_jobs:
-                print(f"[Advanced Search] No recent jobs (within 60 seconds) found for keyword: {search['keyword']}")
-                continue
-            
-            print(f"[Advanced Search] Found {len(recent_jobs)} recent jobs for keyword: {search['keyword']}")
-
-            # Filter only unique recent jobs
-            unique_jobs = []
-            for job in recent_jobs:
-                job_id = job.get('id')
-                if job_id and job_id not in sent_job_ids:
-                    unique_jobs.append(job)
-                    sent_job_ids.add(job_id)
-
-            # Send up to 3 unique recent jobs per keyword
-            for i, job in enumerate(unique_jobs[:3], 1):
-                # Try to store job in database, skip if duplicate
-                try:
-                    if hasattr(scraper, 'store_job_in_db'):
-                        scraper.store_job_in_db(job)
-                except Exception as db_exc:
-                    if 'duplicate' in str(db_exc).lower() or 'unique constraint' in str(db_exc).lower():
-                        print(f"[Advanced Search] Skipping duplicate job ID: {job.get('id')}")
-                        continue
-                    else:
-                        print(f"[Advanced Search] DB error: {db_exc}")
-                        continue
-
-                job_url = build_job_url(job.get('id'))
-                skills = job.get('skills', [])
-                skill_display = " • ".join(skills[:8])
-                if len(skills) > 8:
-                    skill_display += f" • +{len(skills) - 8} more"
-                
-                # Get formatted posting time for display
-                posted_time = format_posted_time(job.get('createdDateTime'))
-                
-                job_msg = (
-                    "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
-                    f"🚨 **{job['title']}** \n"
-                    f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
-                    f"\n"
-                    f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
-                    f"⚡ **Posted**: {posted_time} \n"
-                    f"🕒 **Sent to Discord at:** {datetime.now().strftime('%H:%M')} UTC\n"
-                )
-                if skills:
-                    job_msg += f"🎯 **Key Skills:** `{skill_display}`\n"
-                job_msg += (
-                    f"🌐 [Open Job]({job_url})\n"
-                    f"⚡ Result {i} of {min(len(unique_jobs), 3)} • **FRESH JOB** • Check thread below for detailed info.\n"
-                    f"📊 **Found by keyword:** `{search['keyword']}` in **{search['category']}**\n"
-                )
-                
-                # Post job with automatic details in thread
-                await post_job_with_auto_details(channel, job, job_msg, f"Advanced Search: {search['keyword']}")
-                await asyncio.sleep(2)  # avoid rate limits
-                
-            if unique_jobs:
-                print(f"[Advanced Search] Posted {len(unique_jobs[:3])} recent jobs for keyword: {search['keyword']}")
+            if len(keyword_words) > 1:
+                if all(word in searchable_text for word in keyword_words):
+                    relevant_jobs.append(job)
+                    print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
+                else:
+                    print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Missing keyword words")
             else:
-                print(f"[Advanced Search] No unique recent jobs to post for keyword: {search['keyword']}")
-                
-        except Exception as e:
-            error_msg = f"❌ Error searching recent jobs for **{search['keyword']}** in {search['category']}: {e}"
-            await channel.send(error_msg)
-            print(f"[Advanced Search] Error: {e}")
+                if keyword_lower in searchable_text:
+                    relevant_jobs.append(job)
+                    print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
+                else:
+                    print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Keyword not found")
+        
+        if not relevant_jobs:
+            print(f"[Advanced Search] No relevant jobs found after keyword filtering for: {search['keyword']}")
+            return
+        
+        print(f"[Advanced Search] {len(relevant_jobs)} jobs passed keyword filtering for: {search['keyword']}")
+
+        # Filter only unique relevant jobs
+        unique_jobs = []
+        for job in relevant_jobs:
+            job_id = job.get('id')
+            if job_id and job_id not in sent_job_ids:
+                unique_jobs.append(job)
+                sent_job_ids.add(job_id)
+
+        # Send up to 3 unique relevant jobs per keyword
+        posted_count = 0
+        for i, job in enumerate(unique_jobs[:3], 1):
+            # Try to store job in database, skip if duplicate
+            try:
+                if hasattr(scraper, 'store_job_in_db'):
+                    scraper.store_job_in_db(job)
+            except Exception as db_exc:
+                if 'duplicate' in str(db_exc).lower() or 'unique constraint' in str(db_exc).lower():
+                    print(f"[Advanced Search] Skipping duplicate job ID: {job.get('id')}")
+                    continue
+                else:
+                    print(f"[Advanced Search] DB error: {db_exc}")
+                    continue
+
+            # BUILD COMPLETE MESSAGE WITH ALL DETAILS
+            complete_message = await fetch_and_build_job_message(job, f"{search['keyword']} in {search['category']}")
             
-        # Add small delay between different keyword searches
-        await asyncio.sleep(1)
+            # Skip if auth failed
+            if complete_message is None:
+                print(f"[Advanced Search] Skipping job due to auth failure")
+                continue
+            
+            # POST COMPLETE MESSAGE TO DISCORD (single message with all info)
+            try:
+                await channel.send(complete_message)
+                posted_count += 1
+                print(f"[Post] ✅ Complete job message posted to Discord")
+                await asyncio.sleep(2)  # avoid rate limits
+            except Exception as post_error:
+                print(f"[Post] ❌ Error posting message: {post_error}")
+            
+        if posted_count > 0:
+            print(f"[Advanced Search] Posted {posted_count} complete job messages for keyword: {search['keyword']}")
+        else:
+            print(f"[Advanced Search] No jobs posted for keyword: {search['keyword']}")
+            
+    except Exception as e:
+        error_msg = f"❌ Error searching recent jobs for **{search['keyword']}** in {search['category']}: {e}"
+        try:
+            channel = bot.get_channel(search["channel_id"])
+            if channel:
+                await channel.send(error_msg)
+        except:
+            pass
+        print(f"[Advanced Search] Error in {search['keyword']}: {e}")
+# async def post_job_with_auto_details(channel, job, msg_content, search_context=""):
+#     """
+#     IMPROVED: Fetch job details FIRST (with auto 401 refresh), 
+#     then post job message with details included in the main message.
+#     This ensures auth refresh happens BEFORE posting to Discord.
+#     """
+#     try:
+#         # STEP 1: Fetch job details FIRST (before posting anything to Discord)
+#         job_id = job.get('id') or job.get('ciphertext')
+#         job_details_response = None
+        
+#         if job_id:
+#             try:
+#                 print(f"[Pre-fetch] Fetching details for job ID: {job_id} BEFORE posting to Discord")
+                
+#                 # This will auto-refresh auth on 401 errors
+#                 job_details_response = await asyncio.wait_for(
+#                     scraper.fetch_job_details(job_id),
+#                     timeout=45  # Increased timeout to allow for auth refresh
+#                 )
+                
+#                 if job_details_response:
+#                     # Check if response indicates auth failure
+#                     if isinstance(job_details_response, dict):
+#                         title = job_details_response.get('title', '')
+#                         if 'Authentication Required' in title or 'authentication error' in title.lower():
+#                             print(f"[Pre-fetch] ⚠️ Job details fetch failed due to auth - skipping this job post")
+#                             return  # Don't post job if auth failed
+                    
+#                     print(f"[Pre-fetch] ✅ Job details fetched successfully, now building enhanced message")
+#                 else:
+#                     print(f"[Pre-fetch] ⚠️ No job details returned, will post with basic info only")
+                    
+#             except asyncio.TimeoutError:
+#                 print(f"[Pre-fetch] ⏰ Job details request timed out (may have included auth refresh)")
+#                 # Continue with posting anyway
+#             except Exception as detail_error:
+#                 print(f"[Pre-fetch] ❌ Error pre-fetching job details: {detail_error}")
+#                 # Continue with posting anyway
+        
+#         # STEP 2: Build enhanced message with job details included
+#         enhanced_msg = msg_content
+        
+#         if job_details_response and isinstance(job_details_response, dict):
+#             # Add detailed information to the main message
+#             enhanced_msg += "\n\n**📋 DETAILED JOB INFORMATION:**\n"
+            
+#             # Project Details Section
+#             enhanced_msg += "```"
+#             if job_details_response.get('job_type'):
+#                 enhanced_msg += f"\n💼 Job Type: {job_details_response['job_type']}"
+#             if job_details_response.get('engagement_duration'):
+#                 enhanced_msg += f"\n⏳ Duration: {job_details_response['engagement_duration']}"
+#             if job_details_response.get('category'):
+#                 enhanced_msg += f"\n📂 Category: {job_details_response['category']}"
+#             enhanced_msg += "\n```\n"
+            
+#             # Client Information Section
+#             enhanced_msg += "**👤 CLIENT INFORMATION:**\n```"
+#             if job_details_response.get('client_location'):
+#                 enhanced_msg += f"\n📍 Location: {job_details_response['client_location']}"
+            
+#             # Handle client_total_spent properly
+#             client_total_spent = job_details_response.get('client_total_spent')
+#             if client_total_spent is not None and client_total_spent != "":
+#                 try:
+#                     spent_amount = float(client_total_spent)
+#                     if spent_amount > 0:
+#                         spent_display = f"${spent_amount:,.0f}"
+#                     else:
+#                         spent_display = "$0"
+#                 except (ValueError, TypeError):
+#                     spent_display = str(client_total_spent)
+#             else:
+#                 spent_display = "Not disclosed"
+#             enhanced_msg += f"\n💸 Total Spent: {spent_display}"
+            
+#             # if job_details_response.get('client_industry'):
+#             #     enhanced_msg += f"\n🏢 Industry: {job_details_response['client_industry']}"
+#             # if job_details_response.get('client_company_size'):
+#             #     enhanced_msg += f"\n👥 Company Size: {job_details_response['client_company_size']}"
+            
+#             payment_verified = job_details_response.get('payment_verified', False)
+#             enhanced_msg += f"\n{'✅' if payment_verified else '❌'} Payment Verified: {'Yes' if payment_verified else 'No'}"
+#             enhanced_msg += "\n```\n"
+            
+#             # Requirements Section
+#             # if (job_details_response.get('min_job_success_score') or 
+#             #     job_details_response.get('min_hours') or 
+#             #     job_details_response.get('english_requirement', 'ANY') != 'ANY' or
+#             #     job_details_response.get('portfolio_required', False) or
+#             #     job_details_response.get('rising_talent', False)):
+                
+#             #     enhanced_msg += "**📋 REQUIREMENTS:**\n```"
+#             #     if job_details_response.get('min_job_success_score'):
+#             #         enhanced_msg += f"\n⭐ Min Success Score: {job_details_response['min_job_success_score']}%"
+#             #     if job_details_response.get('min_hours'):
+#             #         enhanced_msg += f"\n🕐 Min Platform Hours: {job_details_response['min_hours']}"
+#             #     if job_details_response.get('min_hours_week'):
+#             #         enhanced_msg += f"\n📅 Min Hours/Week: {job_details_response['min_hours_week']}"
+#             #     if job_details_response.get('portfolio_required', False):
+#             #         enhanced_msg += f"\n📁 Portfolio Required: Yes"
+#             #     if job_details_response.get('rising_talent', False):
+#             #         enhanced_msg += f"\n🌟 Rising Talent: Welcome"
+#             #     if job_details_response.get('english_requirement', 'ANY') != 'ANY':
+#             #         enhanced_msg += f"\n🗣️ English: {job_details_response['english_requirement']}"
+#             #     enhanced_msg += "\n```\n"
+            
+#             # Tools & Skills Section
+#             # tools = job_details_response.get('tools', [])
+#             # if tools:
+#             #     tools_display = ' • '.join(tools[:15])
+#             #     if len(tools) > 15:
+#             #         tools_display += f" • +{len(tools) - 15} more"
+#             #     enhanced_msg += f"**🛠️ TOOLS & PLATFORMS ({len(tools)} total):**\n`{tools_display}`\n\n"
+            
+#             # Additional Info
+#             # if job_details_response.get('deliverables'):
+#             #     deliverables = job_details_response['deliverables'][:200]
+#             #     if len(job_details_response['deliverables']) > 200:
+#             #         deliverables += "..."
+#             #     enhanced_msg += f"**📦 DELIVERABLES:**\n{deliverables}\n\n"
+            
+#             # Competition Stats
+#             # enhanced_msg += "**📊 COMPETITION STATS:**\n```"
+#             # if job_details_response.get('total_applicants'):
+#             #     enhanced_msg += f"\n📝 Proposals: {job_details_response['total_applicants']}"
+#             # if job_details_response.get('total_interviewed'):
+#             #     enhanced_msg += f"\n💬 Interviewing: {job_details_response['total_interviewed']}"
+#             # if job_details_response.get('total_hired'):
+#             #     enhanced_msg += f"\n✅ Hired: {job_details_response['total_hired']}"
+#             # enhanced_msg += "\n```"
+        
+#         # STEP 3: Post the enhanced message to Discord
+#         job_message = await channel.send(enhanced_msg)
+#         print(f"[Post] ✅ Enhanced job message posted to Discord with detailed information")
+            
+#     except Exception as e:
+#         print(f"[Post] ❌ Error posting job with auto details: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         # Don't post anything if there's an error to avoid partial posts
+
+# # Insert this updated function into your Discord bot file, replacing the existing post_job_with_auto_details function
+# # The rest of your Discord bot code remains the same
+
+# async def process_single_search(search):
+#     """Process a single job search independently and asynchronously"""
+#     try:
+#         channel = bot.get_channel(search["channel_id"])
+#         if channel is None:
+#             print(f"[Advanced Search] Channel not found for {search['category']} - {search['keyword']} (ID: {search['channel_id']})")
+#             return
+        
+#         print(f"[Advanced Search] Searching for: {search['keyword']} in category: {search['category']}")
+        
+#         # Fetch jobs for this specific keyword
+#         jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
+        
+#         if not jobs:
+#             print(f"[Advanced Search] No jobs found for keyword: {search['keyword']}")
+#             return
+
+#         # Filter for very recent jobs (posted within last 60 seconds)
+#         recent_jobs = []
+#         for job in jobs:
+#             if is_job_very_recent(job.get('createdDateTime'), max_minutes=5):
+#                 recent_jobs.append(job)
+        
+#         # If no very recent jobs, skip this search
+#         if not recent_jobs:
+#             print(f"[Advanced Search] No recent jobs (within 60 seconds) found for keyword: {search['keyword']}")
+#             return
+        
+#         print(f"[Advanced Search] Found {len(recent_jobs)} recent jobs for keyword: {search['keyword']}")
+
+#         # ===== NEW: FILTER FOR KEYWORD RELEVANCE =====
+#         keyword_lower = search['keyword'].lower()
+        
+#         # Extract individual words from keyword for better matching
+#         keyword_words = set(keyword_lower.replace('-', ' ').split())
+        
+#         # Filter jobs that actually match the keyword
+#         relevant_jobs = []
+#         for job in recent_jobs:
+#             title = job.get('title', '').lower()
+#             description = job.get('description', '').lower()
+#             skills = [s.lower() for s in job.get('skills', [])]
+#             skills_text = ' '.join(skills)
+            
+#             # Combine all searchable text
+#             searchable_text = f"{title} {description} {skills_text}"
+            
+#             # Check if keyword appears in searchable text
+#             # For multi-word keywords, check if all words appear
+#             if len(keyword_words) > 1:
+#                 # All words must appear (allows for variations like "browser" and "fingerprint")
+#                 if all(word in searchable_text for word in keyword_words):
+#                     relevant_jobs.append(job)
+#                     print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
+#                 else:
+#                     print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Missing keyword words")
+#             else:
+#                 # Single word keyword - direct match
+#                 if keyword_lower in searchable_text:
+#                     relevant_jobs.append(job)
+#                     print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
+#                 else:
+#                     print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Keyword not found")
+        
+#         # If no relevant jobs after filtering, skip
+#         if not relevant_jobs:
+#             print(f"[Advanced Search] No relevant jobs found after keyword filtering for: {search['keyword']}")
+#             return
+        
+#         print(f"[Advanced Search] {len(relevant_jobs)} jobs passed keyword filtering for: {search['keyword']}")
+#         # ===== END KEYWORD FILTERING =====
+
+#         # Filter only unique relevant jobs
+#         unique_jobs = []
+#         for job in relevant_jobs:
+#             job_id = job.get('id')
+#             if job_id and job_id not in sent_job_ids:
+#                 unique_jobs.append(job)
+#                 sent_job_ids.add(job_id)
+
+#         # Send up to 3 unique relevant jobs per keyword
+#         for i, job in enumerate(unique_jobs[:3], 1):
+#             # Try to store job in database, skip if duplicate
+#             try:
+#                 if hasattr(scraper, 'store_job_in_db'):
+#                     scraper.store_job_in_db(job)
+#             except Exception as db_exc:
+#                 if 'duplicate' in str(db_exc).lower() or 'unique constraint' in str(db_exc).lower():
+#                     print(f"[Advanced Search] Skipping duplicate job ID: {job.get('id')}")
+#                     continue
+#                 else:
+#                     print(f"[Advanced Search] DB error: {db_exc}")
+#                     continue
+
+#             job_url = build_job_url(job.get('id'))
+#             skills = job.get('skills', [])
+#             skill_display = " • ".join(skills[:8])
+#             if len(skills) > 8:
+#                 skill_display += f" • +{len(skills) - 8} more"
+            
+#             # Get formatted posting time for display
+#             posted_time = format_posted_time(job.get('createdDateTime'))
+            
+#             job_msg = (
+#                 "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
+#                 f"(V2)🚨 **{job['title']}** \n"
+#                 f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
+#                 f"\n"
+#                 f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
+#                 f"⚡ **Posted**: {posted_time} \n"
+#                 f"🕒 **Sent to Discord at:** {datetime.now().strftime('%H:%M')} UTC\n"
+#             )
+#             if skills:
+#                 job_msg += f"🎯 **Key Skills:** `{skill_display}`\n"
+#             job_msg += (
+#                 f"🌐 [Open Job]({job_url})\n"
+#                 f"📊 **Found by keyword:** `{search['keyword']}` in **{search['category']}** \n"
+#             )
+            
+#             # Post job with automatic details in thread
+#             await post_job_with_auto_details(channel, job, job_msg, f"Advanced Search: {search['keyword']}")
+#             await asyncio.sleep(2)  # avoid rate limits
+            
+#         if unique_jobs:
+#             print(f"[Advanced Search] Posted {len(unique_jobs[:3])} relevant jobs for keyword: {search['keyword']}")
+#         else:
+#             print(f"[Advanced Search] No unique relevant jobs to post for keyword: {search['keyword']}")
+            
+#     except Exception as e:
+#         error_msg = f"❌ Error searching recent jobs for **{search['keyword']}** in {search['category']}: {e}"
+#         try:
+#             channel = bot.get_channel(search["channel_id"])
+#             if channel:
+#                 await channel.send(error_msg)
+#         except:
+#             pass
+#         print(f"[Advanced Search] Error in {search['keyword']}: {e}")
+
+async def run_advanced_job_searches():
+    """Run all job searches concurrently and independently"""
+    await bot.wait_until_ready()
+    print("[Advanced Search] Starting advanced job searches (ASYNC MODE)...")
+    
+    # Create a list of tasks for all searches
+    search_tasks = []
+    for search in ADVANCED_JOB_SEARCHES:
+        # Create a task for each search
+        task = asyncio.create_task(process_single_search(search))
+        search_tasks.append(task)
+    
+    # Run all searches concurrently
+    print(f"[Advanced Search] Running {len(search_tasks)} searches concurrently...")
+    
+    # Use gather with return_exceptions=True to prevent one failure from stopping others
+    results = await asyncio.gather(*search_tasks, return_exceptions=True)
+    
+    # Log any errors that occurred
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            search = ADVANCED_JOB_SEARCHES[i]
+            print(f"[Advanced Search] Error in search '{search['keyword']}': {result}")
+    
+    print(f"[Advanced Search] Completed all {len(search_tasks)} concurrent searches")
 
 import discord
 from discord.ext import commands, tasks
@@ -270,8 +632,8 @@ def build_job_details_embed(job_details):
     # Add job overview fields
     if job_details.get('budget'):
         embed.add_field(name="💰 Budget", value=job_details['budget'], inline=True)
-    if job_details.get('contractor_tier'):
-        embed.add_field(name="📊 Contractor Tier", value=job_details['contractor_tier'], inline=True)
+    # if job_details.get('contractor_tier'):
+    #     embed.add_field(name="📊 Contractor Tier", value=job_details['contractor_tier'], inline=True)
     if job_details.get('client_location', 'Unknown') != 'Unknown':
         embed.add_field(name="📍 Client Location", value=job_details['client_location'], inline=True)
 
@@ -282,26 +644,26 @@ def build_job_details_embed(job_details):
         embed.add_field(name="💼 Job Type", value=job_details['job_type'], inline=True)
     if job_details.get('engagement_duration'):
         embed.add_field(name="⏳ Engagement Duration", value=job_details['engagement_duration'], inline=True)
-    if job_details.get('workload'):
-        embed.add_field(name="⏱️ Workload", value=job_details['workload'], inline=True)
-    if job_details.get('deadline'):
-        embed.add_field(name="📅 Deadline", value=job_details['deadline'], inline=True)
+    # if job_details.get('workload'):
+    #     embed.add_field(name="⏱️ Workload", value=job_details['workload'], inline=True)
+    # if job_details.get('deadline'):
+    #     embed.add_field(name="📅 Deadline", value=job_details['deadline'], inline=True)
 
     embed.add_field(name="", value="", inline=False)
 
     # Activity on this job
-    embed.add_field(name="📝 Proposals", value=job_details.get('total_applicants', 0), inline=True)
-    embed.add_field(name="💬 Interviewing", value=job_details.get('total_interviewed', 0), inline=True)
-    embed.add_field(name="✅ Hired", value=job_details.get('total_hired', 0), inline=True)
-    embed.add_field(name="👤 Positions", value=job_details.get('positions_to_hire', 1), inline=True)
+    # embed.add_field(name="📝 Proposals", value=job_details.get('total_applicants', 0), inline=True)
+    # embed.add_field(name="💬 Interviewing", value=job_details.get('total_interviewed', 0), inline=True)
+    # embed.add_field(name="✅ Hired", value=job_details.get('total_hired', 0), inline=True)
+    # embed.add_field(name="👤 Positions", value=job_details.get('positions_to_hire', 1), inline=True)
 
     embed.add_field(name="", value="", inline=False)
 
     # About the client
-    if job_details.get('client_country'):
-        embed.add_field(name="🌍 Client Country", value=job_details['client_country'], inline=True)
-    if job_details.get('client_timezone'):
-        embed.add_field(name="🕒 Client Timezone", value=job_details['client_timezone'], inline=True)
+    # if job_details.get('client_country'):
+    #     embed.add_field(name="🌍 Client Country", value=job_details['client_country'], inline=True)
+    # if job_details.get('client_timezone'):
+    #     embed.add_field(name="🕒 Client Timezone", value=job_details['client_timezone'], inline=True)
     
     # FIX: Properly handle client_total_spent with better formatting
     client_total_spent = job_details.get('client_total_spent')
@@ -319,16 +681,16 @@ def build_job_details_embed(job_details):
     
     embed.add_field(name="💸 Total Spent", value=spent_display, inline=True)
     
-    if job_details.get('client_hours'):
-        embed.add_field(name="⏰ Client Hours", value=f"{job_details['client_hours']:,.0f}", inline=True)
-    if job_details.get('client_total_jobs'):
-        embed.add_field(name="📋 Jobs Posted", value=job_details['client_total_jobs'], inline=True)
-    if job_details.get('client_rating'):
-        rating = f"{job_details['client_rating']:.1f}/5"
-        feedback_count = job_details.get('client_feedback_count')
-        if feedback_count:
-            rating += f" ({feedback_count} reviews)"
-        embed.add_field(name="⭐ Client Rating", value=rating, inline=True)
+    # if job_details.get('client_hours'):
+    #     embed.add_field(name="⏰ Client Hours", value=f"{job_details['client_hours']:,.0f}", inline=True)
+    # if job_details.get('client_total_jobs'):
+    #     embed.add_field(name="📋 Jobs Posted", value=job_details['client_total_jobs'], inline=True)
+    # if job_details.get('client_rating'):
+    #     rating = f"{job_details['client_rating']:.1f}/5"
+    #     feedback_count = job_details.get('client_feedback_count')
+    #     if feedback_count:
+    #         rating += f" ({feedback_count} reviews)"
+    #     embed.add_field(name="⭐ Client Rating", value=rating, inline=True)
     embed.add_field(name="✅ Payment Verified" if job_details.get('payment_verified', False) else "❌ Payment Verified", value="Yes" if job_details.get('payment_verified', False) else "No", inline=True)
     if job_details.get('client_industry'):
         embed.add_field(name="🏢 Industry", value=job_details['client_industry'], inline=True)
@@ -355,11 +717,11 @@ def build_job_details_embed(job_details):
 
     # Tools
     tools = job_details.get('tools', [])
-    if tools:
-        tools_display = ' • '.join(tools[:15])
-        if len(tools) > 15:
-            tools_display += f" • +{len(tools) - 15} more"
-        embed.add_field(name=f"🛠️ Tools ({len(tools)})", value=tools_display, inline=True)
+    # if tools:
+    #     tools_display = ' • '.join(tools[:15])
+    #     if len(tools) > 15:
+    #         tools_display += f" • +{len(tools) - 15} more"
+    #     embed.add_field(name=f"🛠️ Tools ({len(tools)})", value=tools_display, inline=True)
 
     # Additional info
     additional_parts = []
@@ -373,8 +735,8 @@ def build_job_details_embed(job_details):
     similar_jobs_count = job_details.get('similar_jobs_count')
     if similar_jobs_count:
         additional_parts.append(f"🔗 {similar_jobs_count} similar jobs available")
-    if additional_parts:
-        embed.add_field(name="ℹ️ Additional Info", value='\n'.join(additional_parts), inline=True)
+    # if additional_parts:
+    #     embed.add_field(name="ℹ️ Additional Info", value='\n'.join(additional_parts), inline=True)
 
     # Enhanced footer with posting and status info
     footer_parts = []
@@ -480,354 +842,354 @@ async def on_ready():
     print(f"Bot is ready. Username: {bot.user}")
     bot.loop.create_task(run_scrapers_concurrently())
 
-@bot.event
-async def on_message(message):
-    # Don't respond to bot's own messages
-    if message.author == bot.user:
-        return
+# @bot.event
+# async def on_message(message):
+#     # Don't respond to bot's own messages
+#     if message.author == bot.user:
+#         return
     
-    # Only respond in the designated channel
-    if message.channel.id != DISCORD_CHANNEL_ID:
-        return
+#     # Only respond in the designated channel
+#     if message.channel.id != DISCORD_CHANNEL_ID:
+#         return
     
-    # Don't respond to commands (let command handler deal with them)
-    if message.content.startswith(bot.command_prefix):
-        await bot.process_commands(message)
-        return
+#     # Don't respond to commands (let command handler deal with them)
+#     if message.content.startswith(bot.command_prefix):
+#         await bot.process_commands(message)
+#         return
     
-    # Check cooldown
-    user_id = message.author.id
-    current_time = asyncio.get_event_loop().time()
+#     # Check cooldown
+#     user_id = message.author.id
+#     current_time = asyncio.get_event_loop().time()
     
-    if user_id in last_search_time:
-        if current_time - last_search_time[user_id] < COOLDOWN_SECONDS:
-            await message.add_reaction("⏰")  # Clock emoji to indicate cooldown
-            return
+#     if user_id in last_search_time:
+#         if current_time - last_search_time[user_id] < COOLDOWN_SECONDS:
+#             await message.add_reaction("⏰")  # Clock emoji to indicate cooldown
+#             return
     
-    last_search_time[user_id] = current_time
+#     last_search_time[user_id] = current_time
     
-    # Extract keywords from the message
-    keyword = message.content.strip()
+#     # Extract keywords from the message
+#     keyword = message.content.strip()
     
-    # Skip very short messages or common words
-    if len(keyword) < 2 or keyword.lower() in ['hi', 'hello', 'hey', 'ok', 'yes', 'no', 'thanks']:
-        return
+#     # Skip very short messages or common words
+#     if len(keyword) < 2 or keyword.lower() in ['hi', 'hello', 'hey', 'ok', 'yes', 'no', 'thanks']:
+#         return
     
-    # Add a loading reaction
-    await message.add_reaction("🔍")
+#     # Add a loading reaction
+#     await message.add_reaction("🔍")
     
-    try:
-        # Search for jobs using the keyword
-        print(f"🔍 Searching for jobs with keyword: '{keyword}'")
-        jobs = await scraper.fetch_jobs(query=keyword, limit=5)
+#     try:
+#         # Search for jobs using the keyword
+#         print(f"🔍 Searching for jobs with keyword: '{keyword}'")
+#         jobs = await scraper.fetch_jobs(query=keyword, limit=5)
         
-        if jobs:
-            print(f"✅ Found {len(jobs)} jobs for keyword: '{keyword}'")
+#         if jobs:
+#             print(f"✅ Found {len(jobs)} jobs for keyword: '{keyword}'")
             
-            # ADD: Debug job IDs
-            debug_job_ids(jobs)
+#             # ADD: Debug job IDs
+#             debug_job_ids(jobs)
             
-            # Create embed for search results with horizontal layout
-            main_embed = discord.Embed(
-                title=f"🎯 Search Results: '{keyword}'",
-                description=f"Found **{len(jobs)}** matching jobs",
-                color=0x00ff00
-            )
-            main_embed.add_field(name="👤 Requested by", value=message.author.display_name, inline=True)
-            main_embed.add_field(name="📊 Results", value=f"Showing top {min(len(jobs), 3)}", inline=True)
-            main_embed.add_field(name="🕒 Search Time", value=datetime.now().strftime("%H:%M"), inline=True)
-            await message.channel.send(embed=main_embed)
+#             # Create embed for search results with horizontal layout
+#             main_embed = discord.Embed(
+#                 title=f"🎯 Search Results: '{keyword}'",
+#                 description=f"Found **{len(jobs)}** matching jobs",
+#                 color=0x00ff00
+#             )
+#             main_embed.add_field(name="👤 Requested by", value=message.author.display_name, inline=True)
+#             main_embed.add_field(name="📊 Results", value=f"Showing top {min(len(jobs), 3)}", inline=True)
+#             main_embed.add_field(name="🕒 Search Time", value=datetime.now().strftime("%H:%M"), inline=True)
+#             await message.channel.send(embed=main_embed)
 
-            # Send individual job embeds with improved horizontal layout (limit to first 3)
-            for i, job in enumerate(jobs[:3], 1):
-                embed = discord.Embed(
-                    title=f"📋 {job['title']}",
-                    description=job['description'][:400] + "..." if len(job['description']) > 400 else job['description'],
-                    color=0x1abc9c,
-                    url=build_job_url(job.get('id'))
-                )
+#             # Send individual job embeds with improved horizontal layout (limit to first 3)
+#             for i, job in enumerate(jobs[:3], 1):
+#                 embed = discord.Embed(
+#                     title=f"📋 {job['title']}",
+#                     description=job['description'][:400] + "..." if len(job['description']) > 400 else job['description'],
+#                     color=0x1abc9c,
+#                     url=build_job_url(job.get('id'))
+#                 )
                 
-                # ROW 1: Budget, Experience, Type (3 columns)
-                embed.add_field(name="💰 Budget", value=job.get('budget', 'N/A'), inline=True)
-                embed.add_field(name="📊 Experience", value=job.get('experience_level', 'Any'), inline=True)
-                embed.add_field(name="💼 Type", value=job.get('job_type', 'N/A'), inline=True)
+#                 # ROW 1: Budget, Experience, Type (3 columns)
+#                 embed.add_field(name="💰 Budget", value=job.get('budget', 'N/A'), inline=True)
+#                 embed.add_field(name="📊 Experience", value=job.get('experience_level', 'Any'), inline=True)
+#                 embed.add_field(name="💼 Type", value=job.get('job_type', 'N/A'), inline=True)
                 
-                # ROW 2: Duration, Posted, Apply (3 columns)
-                embed.add_field(name="⏱️ Duration", value=job.get('duration_label', 'N/A'), inline=True)
-                embed.add_field(name="🕒 Posted", value=format_posted_time(job.get('createdDateTime')), inline=True)
-                embed.add_field(name="🌐 Quick Apply", value="[Open Job]("+build_job_url(job.get('id'))+")", inline=True)
+#                 # ROW 2: Duration, Posted, Apply (3 columns)
+#                 embed.add_field(name="⏱️ Duration", value=job.get('duration_label', 'N/A'), inline=True)
+#                 embed.add_field(name="🕒 Posted", value=format_posted_time(job.get('createdDateTime')), inline=True)
+#                 embed.add_field(name="🌐 Quick Apply", value="[Open Job]("+build_job_url(job.get('id'))+")", inline=True)
                 
-                # Skills row (full width but compact)
-                skills = job.get('skills', [])
-                if skills:
-                    skill_display = " • ".join(skills[:10])
-                    if len(skills) > 10:
-                        skill_display += f" • +{len(skills) - 10} more"
-                    embed.add_field(
-                        name="🎯 Required Skills",
-                        value=f"`{skill_display}`",
-                        inline=False
-                    )
+#                 # Skills row (full width but compact)
+#                 skills = job.get('skills', [])
+#                 if skills:
+#                     skill_display = " • ".join(skills[:10])
+#                     if len(skills) > 10:
+#                         skill_display += f" • +{len(skills) - 10} more"
+#                     embed.add_field(
+#                         name="🎯 Required Skills",
+#                         value=f"`{skill_display}`",
+#                         inline=False
+#                     )
                 
-                embed.set_footer(
-                    text=f"Result {i} of {min(len(jobs), 3)} • Detailed info will be posted in thread automatically",
-                    icon_url="https://img.icons8.com/fluency/48/000000/upwork.png"
-                )
+#                 embed.set_footer(
+#                     text=f"Result {i} of {min(len(jobs), 3)} • Detailed info will be posted in thread automatically",
+#                     icon_url="https://img.icons8.com/fluency/48/000000/upwork.png"
+#                 )
                 
-                # Post job with automatic details in thread
-                await post_job_with_auto_details(message.channel, job, embed=embed, search_context=f"User search: {keyword}")
-                await asyncio.sleep(1)
+#                 # Post job with automatic details in thread
+#                 await post_job_with_auto_details(message.channel, job, embed=embed, search_context=f"User search: {keyword}")
+#                 await asyncio.sleep(1)
             
-            # If there are more jobs, show summary
-            if len(jobs) > 3:
-                overflow_embed = discord.Embed(
-                    title="📋 More Results Available",
-                    description=f"Found **{len(jobs) - 3}** additional jobs",
-                    color=0xf39c12
-                )
-                overflow_embed.add_field(name="💡 Tip", value=f"Use `!jobs {keyword}` to see all results", inline=True)
-                overflow_embed.add_field(name="🔍 Refine", value="Try more specific keywords", inline=True)
-                await message.channel.send(embed=overflow_embed)
+#             # If there are more jobs, show summary
+#             if len(jobs) > 3:
+#                 overflow_embed = discord.Embed(
+#                     title="📋 More Results Available",
+#                     description=f"Found **{len(jobs) - 3}** additional jobs",
+#                     color=0xf39c12
+#                 )
+#                 overflow_embed.add_field(name="💡 Tip", value=f"Use `!jobs {keyword}` to see all results", inline=True)
+#                 overflow_embed.add_field(name="🔍 Refine", value="Try more specific keywords", inline=True)
+#                 await message.channel.send(embed=overflow_embed)
             
-            # Remove the loading reaction and add success
-            await message.remove_reaction("🔍", bot.user)
-            await message.add_reaction("✅")
+#             # Remove the loading reaction and add success
+#             await message.remove_reaction("🔍", bot.user)
+#             await message.add_reaction("✅")
             
-        else:
-            # No jobs found with enhanced layout
-            embed = discord.Embed(
-                title="😞 No Jobs Found",
-                description=f"No jobs matching **'{keyword}'** found right now",
-                color=0xe74c3c
-            )
-            embed.add_field(name="💡 Try These", value="• python\n• web developer\n• data analyst", inline=True)
-            embed.add_field(name="🔄 Or Try", value="• graphic design\n• content writing\n• social media", inline=True)
-            embed.add_field(name="⏰ Check Back", value="New jobs posted hourly!", inline=True)
-            await message.channel.send(embed=embed)
+#         else:
+#             # No jobs found with enhanced layout
+#             embed = discord.Embed(
+#                 title="😞 No Jobs Found",
+#                 description=f"No jobs matching **'{keyword}'** found right now",
+#                 color=0xe74c3c
+#             )
+#             embed.add_field(name="💡 Try These", value="• python\n• web developer\n• data analyst", inline=True)
+#             embed.add_field(name="🔄 Or Try", value="• graphic design\n• content writing\n• social media", inline=True)
+#             embed.add_field(name="⏰ Check Back", value="New jobs posted hourly!", inline=True)
+#             await message.channel.send(embed=embed)
             
-            # Remove loading and add sad reaction
-            await message.remove_reaction("🔍", bot.user)
-            await message.add_reaction("😞")
+#             # Remove loading and add sad reaction
+#             await message.remove_reaction("🔍", bot.user)
+#             await message.add_reaction("😞")
     
-    except Exception as e:
-        print(f"❌ Error searching for jobs: {e}")
+#     except Exception as e:
+#         print(f"❌ Error searching for jobs: {e}")
         
-        error_embed = discord.Embed(
-            title="⚠️ Search Error",
-            description="Something went wrong while searching for jobs.",
-            color=0xe74c3c
-        )
-        error_embed.add_field(name="🔧 Status", value="Temporary issue", inline=True)
-        error_embed.add_field(name="⏰ Retry", value="Try again in a moment", inline=True)
-        error_embed.add_field(name="💬 Help", value="Use `!help_jobs` for tips", inline=True)
-        await message.channel.send(embed=error_embed)
+#         error_embed = discord.Embed(
+#             title="⚠️ Search Error",
+#             description="Something went wrong while searching for jobs.",
+#             color=0xe74c3c
+#         )
+#         error_embed.add_field(name="🔧 Status", value="Temporary issue", inline=True)
+#         error_embed.add_field(name="⏰ Retry", value="Try again in a moment", inline=True)
+#         error_embed.add_field(name="💬 Help", value="Use `!help_jobs` for tips", inline=True)
+#         await message.channel.send(embed=error_embed)
         
-        # Remove loading and add error reaction
-        await message.remove_reaction("🔍", bot.user)
-        await message.add_reaction("❌")
+#         # Remove loading and add error reaction
+#         await message.remove_reaction("🔍", bot.user)
+#         await message.add_reaction("❌")
     
-    # Process commands after handling the message
-    await bot.process_commands(message)
+#     # Process commands after handling the message
+#     await bot.process_commands(message)
 
-@bot.command()
-async def jobs(ctx, *, keyword=None):
-    """Command to search for jobs with enhanced horizontal layout"""
-    if not keyword:
-        msg = (
-            "🔍 **Job Search Command**\n"
-            "Search for Upwork jobs with detailed results\n\n"
-            "📝 **Usage:** `!jobs <keyword>`\n"
-            "💡 **Example:** `!jobs python developer`\n"
-            "📊 **Results:** Shows up to 10 jobs with auto-generated detail threads"
-        )
-        await ctx.send(msg)
-        return
+# @bot.command()
+# async def jobs(ctx, *, keyword=None):
+#     """Command to search for jobs with enhanced horizontal layout"""
+#     if not keyword:
+#         msg = (
+#             "🔍 **Job Search Command**\n"
+#             "Search for Upwork jobs with detailed results\n\n"
+#             "📝 **Usage:** `!jobs <keyword>`\n"
+#             "💡 **Example:** `!jobs python developer`\n"
+#             "📊 **Results:** Shows up to 10 jobs with auto-generated detail threads"
+#         )
+#         await ctx.send(msg)
+#         return
 
-    # Add loading message
-    loading_msg = await ctx.send("🔍 Searching for jobs...")
+#     # Add loading message
+#     loading_msg = await ctx.send("🔍 Searching for jobs...")
 
-    try:
-        jobs = await scraper.fetch_jobs(query=keyword, limit=10)
-        # Filter jobs by keyword in title, description, or skills
-        keyword_lower = keyword.lower()
-        filtered_jobs = []
-        for job in jobs:
-            title = job.get('title', '').lower()
-            description = job.get('description', '').lower()
-            skills = [s.lower() for s in job.get('skills', [])]
-            if (
-                keyword_lower in title
-                or keyword_lower in description
-                or any(keyword_lower in skill for skill in skills)
-            ):
-                filtered_jobs.append(job)
+#     try:
+#         jobs = await scraper.fetch_jobs(query=keyword, limit=10)
+#         # Filter jobs by keyword in title, description, or skills
+#         keyword_lower = keyword.lower()
+#         filtered_jobs = []
+#         for job in jobs:
+#             title = job.get('title', '').lower()
+#             description = job.get('description', '').lower()
+#             skills = [s.lower() for s in job.get('skills', [])]
+#             if (
+#                 keyword_lower in title
+#                 or keyword_lower in description
+#                 or any(keyword_lower in skill for skill in skills)
+#             ):
+#                 filtered_jobs.append(job)
 
-        if filtered_jobs:
-            # Delete loading message
-            await loading_msg.delete()
+#         if filtered_jobs:
+#             # Delete loading message
+#             await loading_msg.delete()
 
-            # Create main results message
-            main_msg = (
-                f"🎯 **Search Results: '{keyword}'**\n"
-                f"Found **{len(filtered_jobs)}** relevant jobs\n"
-                f"👤 **Requested by:** {ctx.author.display_name}\n"
-                f"📊 **Showing:** {min(len(filtered_jobs), 10)} jobs\n"
-                f"🕒 **Search Time:** {datetime.now().strftime('%H:%M UTC')}\n"
-                f"📋 **Note:** Detailed info will be automatically posted in threads for each job\n"
-            )
-            await ctx.send(main_msg)
+#             # Create main results message
+#             main_msg = (
+#                 f"🎯 **Search Results: '{keyword}'**\n"
+#                 f"Found **{len(filtered_jobs)}** relevant jobs\n"
+#                 f"👤 **Requested by:** {ctx.author.display_name}\n"
+#                 f"📊 **Showing:** {min(len(filtered_jobs), 10)} jobs\n"
+#                 f"🕒 **Search Time:** {datetime.now().strftime('%H:%M UTC')}\n"
+#                 f"📋 **Note:** Detailed info will be automatically posted in threads for each job\n"
+#             )
+#             await ctx.send(main_msg)
 
-            # Send all filtered jobs found (up to 10) with auto details
-            for i, job in enumerate(filtered_jobs, 1):
-                job_url = build_job_url(job.get('id'))
-                skills = job.get('skills', [])
-                skill_display = ""
-                if skills:
-                    skill_display = " • ".join(skills[:12])
-                    if len(skills) > 12:
-                        skill_display += f" • +{len(skills) - 12} more"
+#             # Send all filtered jobs found (up to 10) with auto details
+#             for i, job in enumerate(filtered_jobs, 1):
+#                 job_url = build_job_url(job.get('id'))
+#                 skills = job.get('skills', [])
+#                 skill_display = ""
+#                 if skills:
+#                     skill_display = " • ".join(skills[:12])
+#                     if len(skills) > 12:
+#                         skill_display += f" • +{len(skills) - 12} more"
 
-                job_msg = (
-                    "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n"
-                    f"📋 **{job['title']}**\n"
-                    f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n\n"
-                    f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
-                    f"📊 **Level:** {job.get('experience_level', 'Any')}\n"
-                    f"💼 **Type:** {job.get('job_type', 'N/A')}\n"
-                    f"⏱️ **Duration:** {job.get('duration_label', 'N/A')}\n"
-                    f"🕒 **Posted:** {format_posted_time(job.get('createdDateTime'))}\n"
-                    f"🎯 **Result:** #{i} of {len(filtered_jobs)}\n"
-                )
-                if skill_display:
-                    job_msg += f"🎯 **Required Skills:** `{skill_display}`\n"
-                job_msg += (
-                    f"🌐 [Open Job]({job_url})\n"
-                    f"Job {i} of {len(filtered_jobs)} • Detailed info will be posted in thread below.\n"
-                    "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n"
-                )
+#                 job_msg = (
+#                     "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n"
+#                     f"📋 **{job['title']}**\n"
+#                     f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n\n"
+#                     f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
+#                     f"📊 **Level:** {job.get('experience_level', 'Any')}\n"
+#                     f"💼 **Type:** {job.get('job_type', 'N/A')}\n"
+#                     f"⏱️ **Duration:** {job.get('duration_label', 'N/A')}\n"
+#                     f"🕒 **Posted:** {format_posted_time(job.get('createdDateTime'))}\n"
+#                     f"🎯 **Result:** #{i} of {len(filtered_jobs)}\n"
+#                 )
+#                 if skill_display:
+#                     job_msg += f"🎯 **Required Skills:** `{skill_display}`\n"
+#                 job_msg += (
+#                     f"🌐 [Open Job]({job_url})\n"
+#                     f"Job {i} of {len(filtered_jobs)} • Detailed info will be posted in thread below.\n"
+#                     "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n"
+#                 )
                 
-                # Post job with automatic details in thread
-                await post_job_with_auto_details(ctx.channel, job, job_msg, f"Command search: {keyword}")
-                await asyncio.sleep(0.5)
-        else:
-            await loading_msg.edit(content="😞 No jobs found for that keyword. Try different search terms!")
+#                 # Post job with automatic details in thread
+#                 await post_job_with_auto_details(ctx.channel, job, job_msg, f"Command search: {keyword}")
+#                 await asyncio.sleep(0.5)
+#         else:
+#             await loading_msg.edit(content="😞 No jobs found for that keyword. Try different search terms!")
 
-    except Exception as e:
-        print(f"❌ Error in jobs command: {e}")
-        await loading_msg.edit(content="❌ An error occurred while searching. Please try again later.")
+#     except Exception as e:
+#         print(f"❌ Error in jobs command: {e}")
+#         await loading_msg.edit(content="❌ An error occurred while searching. Please try again later.")
 
-@bot.command()
-async def skills(ctx, *, keyword=None):
-    """Command to search for jobs with enhanced skills analysis and horizontal layout"""
-    if not keyword:
-        embed = discord.Embed(
-            title="🎯 Skills Analysis Command",
-            description="Analyze skills required for specific job types",
-            color=0x3498db
-        )
-        embed.add_field(name="📝 Usage", value="`!skills <keyword>`", inline=True)
-        embed.add_field(name="💡 Example", value="`!skills react developer`", inline=True)
-        embed.add_field(name="📊 Analysis", value="Shows skills breakdown with auto-generated detail threads", inline=True)
-        await ctx.send(embed=embed)
-        return
+# @bot.command()
+# async def skills(ctx, *, keyword=None):
+#     """Command to search for jobs with enhanced skills analysis and horizontal layout"""
+#     if not keyword:
+#         embed = discord.Embed(
+#             title="🎯 Skills Analysis Command",
+#             description="Analyze skills required for specific job types",
+#             color=0x3498db
+#         )
+#         embed.add_field(name="📝 Usage", value="`!skills <keyword>`", inline=True)
+#         embed.add_field(name="💡 Example", value="`!skills react developer`", inline=True)
+#         embed.add_field(name="📊 Analysis", value="Shows skills breakdown with auto-generated detail threads", inline=True)
+#         await ctx.send(embed=embed)
+#         return
     
-    # Add loading message
-    loading_msg = await ctx.send("🔍 Searching jobs and analyzing skills...")
+#     # Add loading message
+#     loading_msg = await ctx.send("🔍 Searching jobs and analyzing skills...")
     
-    try:
-        jobs = await scraper.fetch_jobs(query=keyword, limit=5)
+#     try:
+#         jobs = await scraper.fetch_jobs(query=keyword, limit=5)
         
-        if jobs:
-            # Delete loading message
-            await loading_msg.delete()
+#         if jobs:
+#             # Delete loading message
+#             await loading_msg.delete()
             
-            # Create skills summary
-            all_skills = {}
-            for job in jobs:
-                for skill in job.get('skills', []):
-                    if skill and skill.strip():
-                        all_skills[skill] = all_skills.get(skill, 0) + 1
+#             # Create skills summary
+#             all_skills = {}
+#             for job in jobs:
+#                 for skill in job.get('skills', []):
+#                     if skill and skill.strip():
+#                         all_skills[skill] = all_skills.get(skill, 0) + 1
             
-            # Sort skills by frequency
-            sorted_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)
+#             # Sort skills by frequency
+#             sorted_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)
             
-            # Create enhanced skills summary embed
-            skills_embed = discord.Embed(
-                title=f"🎯 Skills Analysis: '{keyword}'",
-                description=f"Analyzed **{len(jobs)}** jobs with **{len(all_skills)}** unique skills",
-                color=0x9b59b6
-            )
+#             # Create enhanced skills summary embed
+#             skills_embed = discord.Embed(
+#                 title=f"🎯 Skills Analysis: '{keyword}'",
+#                 description=f"Analyzed **{len(jobs)}** jobs with **{len(all_skills)}** unique skills",
+#                 color=0x9b59b6
+#             )
             
-            # Stats row (3 columns)
-            skills_embed.add_field(name="📊 Jobs Analyzed", value=str(len(jobs)), inline=True)
-            skills_embed.add_field(name="🎯 Unique Skills", value=str(len(all_skills)), inline=True)
-            skills_embed.add_field(name="🔥 Top Skills", value=str(min(10, len(sorted_skills))), inline=True)
+#             # Stats row (3 columns)
+#             skills_embed.add_field(name="📊 Jobs Analyzed", value=str(len(jobs)), inline=True)
+#             skills_embed.add_field(name="🎯 Unique Skills", value=str(len(all_skills)), inline=True)
+#             skills_embed.add_field(name="🔥 Top Skills", value=str(min(10, len(sorted_skills))), inline=True)
             
-            # Show top 12 most requested skills in compact format
-            if sorted_skills:
-                top_skills = sorted_skills[:12]
-                skills_text = " • ".join([f"**{skill}** ({count})" for skill, count in top_skills])
-                skills_embed.add_field(
-                    name="🔥 Most In-Demand Skills",
-                    value=skills_text,
-                    inline=False
-                )
+#             # Show top 12 most requested skills in compact format
+#             if sorted_skills:
+#                 top_skills = sorted_skills[:12]
+#                 skills_text = " • ".join([f"**{skill}** ({count})" for skill, count in top_skills])
+#                 skills_embed.add_field(
+#                     name="🔥 Most In-Demand Skills",
+#                     value=skills_text,
+#                     inline=False
+#                 )
             
-            skills_embed.set_footer(text=f"Analysis complete • Requested by {ctx.author.display_name}")
-            await ctx.send(embed=skills_embed)
+#             skills_embed.set_footer(text=f"Analysis complete • Requested by {ctx.author.display_name}")
+#             await ctx.send(embed=skills_embed)
             
-            # Send individual job embeds with enhanced skills focus and auto details
-            for i, job in enumerate(jobs, 1):
-                embed = discord.Embed(
-                    title=f"📋 {job['title']}",
-                    description=job['description'][:300] + "..." if len(job['description']) > 300 else job['description'],
-                    color=0x8e44ad,
-                    url=build_job_url(job.get('id'))
-                )
+#             # Send individual job embeds with enhanced skills focus and auto details
+#             for i, job in enumerate(jobs, 1):
+#                 embed = discord.Embed(
+#                     title=f"📋 {job['title']}",
+#                     description=job['description'][:300] + "..." if len(job['description']) > 300 else job['description'],
+#                     color=0x8e44ad,
+#                     url=build_job_url(job.get('id'))
+#                 )
                 
-                # ROW 1: Budget, Experience, Type (3 columns)
-                embed.add_field(name="💰 Budget", value=job.get('budget', 'N/A'), inline=True)
-                embed.add_field(name="📊 Level", value=job.get('experience_level', 'Any'), inline=True)
-                embed.add_field(name="💼 Type", value=job.get('job_type', 'N/A'), inline=True)
+#                 # ROW 1: Budget, Experience, Type (3 columns)
+#                 embed.add_field(name="💰 Budget", value=job.get('budget', 'N/A'), inline=True)
+#                 embed.add_field(name="📊 Level", value=job.get('experience_level', 'Any'), inline=True)
+#                 embed.add_field(name="💼 Type", value=job.get('job_type', 'N/A'), inline=True)
                 
-                # Skills analysis (full width, prominent)
-                skills = job.get('skills', [])
-                skills_count = len(skills)
-                if skills:
-                    skill_display = " • ".join(skills[:10])
-                    if len(skills) > 10:
-                        skill_display += f" • +{len(skills) - 10} more"
-                    embed.add_field(
-                        name=f"🎯 Required Skills ({skills_count} total)",
-                        value=f"`{skill_display}`",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(
-                        name="🎯 Skills",
-                        value="No specific skills listed",
-                        inline=False
-                    )
+#                 # Skills analysis (full width, prominent)
+#                 skills = job.get('skills', [])
+#                 skills_count = len(skills)
+#                 if skills:
+#                     skill_display = " • ".join(skills[:10])
+#                     if len(skills) > 10:
+#                         skill_display += f" • +{len(skills) - 10} more"
+#                     embed.add_field(
+#                         name=f"🎯 Required Skills ({skills_count} total)",
+#                         value=f"`{skill_display}`",
+#                         inline=False
+#                     )
+#                 else:
+#                     embed.add_field(
+#                         name="🎯 Skills",
+#                         value="No specific skills listed",
+#                         inline=False
+#                     )
                 
-                # ROW 2: Duration, Posted, Skills Count (3 columns)
-                embed.add_field(name="⏱️ Duration", value=job.get('duration_label', 'N/A'), inline=True)
-                embed.add_field(name="🕒 Posted", value=format_posted_time(job.get('createdDateTime')), inline=True)
-                embed.add_field(name="📊 Skills Count", value=f"{skills_count} skills", inline=True)
+#                 # ROW 2: Duration, Posted, Skills Count (3 columns)
+#                 embed.add_field(name="⏱️ Duration", value=job.get('duration_label', 'N/A'), inline=True)
+#                 embed.add_field(name="🕒 Posted", value=format_posted_time(job.get('createdDateTime')), inline=True)
+#                 embed.add_field(name="📊 Skills Count", value=f"{skills_count} skills", inline=True)
                 
-                embed.set_footer(
-                    text=f"Skills Analysis {i}/{len(jobs)} • Detailed info will be posted in thread below",
-                    icon_url="https://img.icons8.com/fluency/48/000000/clock.png"
-                )
+#                 embed.set_footer(
+#                     text=f"Skills Analysis {i}/{len(jobs)} • Detailed info will be posted in thread below",
+#                     icon_url="https://img.icons8.com/fluency/48/000000/clock.png"
+#                 )
                 
-                # Post job with automatic details in thread
-                await post_job_with_auto_details(ctx.channel, job, embed=embed, search_context=f"Skills analysis: {keyword}")
-                await asyncio.sleep(0.5)
-        else:
-            await loading_msg.edit(content="😞 No jobs found for skills analysis. Try different search terms!")
+#                 # Post job with automatic details in thread
+#                 await post_job_with_auto_details(ctx.channel, job, embed=embed, search_context=f"Skills analysis: {keyword}")
+#                 await asyncio.sleep(0.5)
+#         else:
+#             await loading_msg.edit(content="😞 No jobs found for skills analysis. Try different search terms!")
             
-    except Exception as e:
-        print(f"❌ Error in skills command: {e}")
-        await loading_msg.edit(content="❌ An error occurred while analyzing skills. Please try again later.")
+#     except Exception as e:
+#         print(f"❌ Error in skills command: {e}")
+#         await loading_msg.edit(content="❌ An error occurred while analyzing skills. Please try again later.")
 
 @bot.command()
 async def help_jobs(ctx):

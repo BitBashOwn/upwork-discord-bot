@@ -40,45 +40,47 @@ ADVANCED_JOB_SEARCHES = [
     {
         "category": "Stealth Automation",
         "keyword": "Multilogin",
-        "query": "Multilogin",
+        "query": 'title:(Multilogin) OR description:(Multilogin)',  # Search in title or description
         "channel_id": 1420931377972641873
     },
     {
         "category": "Stealth Automation", 
         "keyword": "GoLogin",
-        "query": "gologin",
+        "query": 'title:(GoLogin) OR description:(GoLogin)',
         "channel_id": 1420931377972641873
     },
     {
         "category": "Stealth Automation",
         "keyword": "Incognition",
-        "query": "incognition", 
-        "channel_id": 1420931377972641873
-    },
-    {
-        "category": "Stealth Automation",
-        "keyword": "Browser Fingerprint",
-        "query": "(browser AND fingerprint)",
-        "channel_id": 1420931377972641873
-    },
-    {
-        "category": "Stealth Automation",
-        "keyword": "Stealth Automation",
-        "query": "(stealth AND automation)",
-        "channel_id": 1420931377972641873
-    },
-    {
-        "category": "Stealth Automation", 
-        "keyword": "Social Media Automation",
-        "query": "title:(social media automation)",
+        "query": 'title:(Incognition) OR description:(Incognition)', 
         "channel_id": 1420931377972641873
     },
     {
         "category": "Stealth Automation",
         "keyword": "AdsPower",
-        "query": "adspower",
+        "query": 'title:(AdsPower) OR description:(AdsPower)',
         "channel_id": 1420931377972641873
     },
+    # Concept-based searches - keep these but they'll be filtered
+    {
+        "category": "Stealth Automation",
+        "keyword": "Browser Fingerprint",
+        "query": 'title:("browser fingerprint") OR description:("browser fingerprint")',
+        "channel_id": 1420931377972641873
+    },
+    {
+        "category": "Stealth Automation",
+        "keyword": "Antidetect Browser",
+        "query": 'title:(antidetect) OR description:(antidetect browser)',
+        "channel_id": 1420931377972641873
+    },
+    {
+        "category": "Stealth Automation", 
+        "keyword": "Social Media Automation",
+        "query": 'title:("social media automation")',
+        "channel_id": 1420931377972641873
+    },
+    
     # AI Automation Keywords  
     {
         "category": "AI Automation",

@@ -7,7 +7,7 @@ import asyncio
 import random
 import os
 
-async def fetch_jobs(scraper, query="", limit=10, delay=True):
+async def fetch_jobs(scraper, query, limit=10, delay=True):
     from .graphql_payloads import VISITOR_JOB_SEARCH_QUERY, MINIMAL_VISITOR_JOB_SEARCH_QUERY
     print(f"Trying visitorJobSearch with query: '{query}'")
     scraper.base_headers['Referer'] = f"https://www.upwork.com/nx/search/jobs/?q={query}"
@@ -31,7 +31,7 @@ async def fetch_jobs(scraper, query="", limit=10, delay=True):
         debug_job_ids(jobs_data)
         return jobs_data
     print("First attempt failed, trying minimal search...")
-    return await try_minimal_search(scraper, limit, delay)
+    return await try_minimal_search(scraper, query, limit, delay)
 
 def debug_job_ids(jobs_data):
     # This function is already imported and used as a helper, so just return as is
@@ -113,7 +113,7 @@ async def make_graphql_request(scraper, payload, method_name):
             return []
     return []
 
-async def try_minimal_search(scraper, limit, delay):
+async def try_minimal_search(scraper, query, limit, delay):
     from .graphql_payloads import MINIMAL_VISITOR_JOB_SEARCH_QUERY
     graphql_payload_minimal = {
         "query": MINIMAL_VISITOR_JOB_SEARCH_QUERY,
@@ -123,7 +123,8 @@ async def try_minimal_search(scraper, limit, delay):
                 "paging": {
                     "offset": 0,
                     "count": limit
-                }
+                },
+                "userQuery": query  # Use userQuery for advanced keyword search
             }
         }
     }
