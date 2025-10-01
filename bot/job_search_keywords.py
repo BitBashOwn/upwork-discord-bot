@@ -111,7 +111,12 @@ ADVANCED_JOB_SEARCHES = [
         "category": "Web Development",
         "keyword": "Web Developer Stack",
         "query": "(Web AND Developer) AND (Flask OR Django OR Mern OR Express OR Electron OR NextJs OR React OR Next OR Laravel OR Frontend OR Website OR development)",
-        "channel_id": 1420931454702981242
+        "channel_id": 1420931454702981242,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]  # Both hourly and fixed-price
+        }
     },
     # TikTok Shop Keywords
     {

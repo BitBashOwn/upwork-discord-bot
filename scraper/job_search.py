@@ -1,37 +1,67 @@
-# scraper/job_search.py
-"""
-Handles job search and extraction for UpworkScraper.
-"""
-
 import asyncio
 import random
 import os
 
-async def fetch_jobs(scraper, query, limit=10, delay=True):
+async def fetch_jobs(scraper, query, limit=100, delay=True, filters=None):
+   
     from .graphql_payloads import VISITOR_JOB_SEARCH_QUERY, MINIMAL_VISITOR_JOB_SEARCH_QUERY
+    
     print(f"Trying visitorJobSearch with query: '{query}'")
+    if filters:
+        print(f"  Filters applied: {filters}")
+    
     scraper.base_headers['Referer'] = f"https://www.upwork.com/nx/search/jobs/?q={query}"
+    
+    # Build request variables
+    request_vars = {
+        "sort": "recency",
+        "paging": {
+            "offset": 0,
+            "count": limit
+        },
+        "userQuery": query
+    }
+    
+    # ADD FILTERS IF PROVIDED
+    if filters:
+        if "contractor_tier" in filters and filters["contractor_tier"]:
+            request_vars["contractorTier"] = filters["contractor_tier"]
+            print(f"  - Contractor Tier: {filters['contractor_tier']}")
+        
+        if "payment_verified" in filters and filters["payment_verified"]:
+            request_vars["clientPaymentVerificationStatus"] = True
+            print(f"  - Payment Verified: Required")
+        
+        if "job_type" in filters and filters["job_type"]:
+            # Map job types to Upwork's format
+            job_type_map = {
+                "hourly": "HOURLY",
+                "fixed": "FIXED_PRICE"
+            }
+            request_vars["jobType"] = [
+                job_type_map.get(jt.lower(), jt.upper()) 
+                for jt in filters["job_type"]
+            ]
+            print(f"  - Job Types: {request_vars['jobType']}")
+    
     graphql_payload = {
         "query": VISITOR_JOB_SEARCH_QUERY,
         "variables": {
-            "requestVariables": {
-                "sort": "recency",
-                "paging": {
-                    "offset": 0,
-                    "count": limit
-                },
-                "userQuery": query  # Use userQuery for advanced keyword search
-            }
+            "requestVariables": request_vars
         }
     }
+    
     if delay:
-        await asyncio.sleep(random.uniform(2, 4))
+        await asyncio.sleep(2)
+    
     jobs_data = await make_graphql_request(scraper, graphql_payload, "VisitorJobSearch")
+    
     if jobs_data:
         debug_job_ids(jobs_data)
         return jobs_data
+    
     print("First attempt failed, trying minimal search...")
-    return await try_minimal_search(scraper, query, limit, delay)
+    return await try_minimal_search(scraper, query, limit, delay, filters)
 
 def debug_job_ids(jobs_data):
     # This function is already imported and used as a helper, so just return as is
@@ -113,23 +143,47 @@ async def make_graphql_request(scraper, payload, method_name):
             return []
     return []
 
-async def try_minimal_search(scraper, query, limit, delay):
+async def try_minimal_search(scraper, query, limit, delay, filters=None):
+    """
+    Minimal search fallback - UPDATED to support filters
+    """
     from .graphql_payloads import MINIMAL_VISITOR_JOB_SEARCH_QUERY
+    
+    # Build request variables with filters
+    request_vars = {
+        "sort": "recency",
+        "paging": {
+            "offset": 0,
+            "count": limit
+        },
+        "userQuery": query
+    }
+    
+    # Add filters if provided
+    if filters:
+        if "contractor_tier" in filters and filters["contractor_tier"]:
+            request_vars["contractorTier"] = filters["contractor_tier"]
+        
+        if "payment_verified" in filters and filters["payment_verified"]:
+            request_vars["clientPaymentVerificationStatus"] = True
+        
+        if "job_type" in filters and filters["job_type"]:
+            job_type_map = {"hourly": "HOURLY", "fixed": "FIXED_PRICE"}
+            request_vars["jobType"] = [
+                job_type_map.get(jt.lower(), jt.upper()) 
+                for jt in filters["job_type"]
+            ]
+    
     graphql_payload_minimal = {
         "query": MINIMAL_VISITOR_JOB_SEARCH_QUERY,
         "variables": {
-            "requestVariables": {
-                "sort": "recency",
-                "paging": {
-                    "offset": 0,
-                    "count": limit
-                },
-                "userQuery": query  # Use userQuery for advanced keyword search
-            }
+            "requestVariables": request_vars
         }
     }
+    
     if delay:
         await asyncio.sleep(random.uniform(2, 4))
+    
     print(f"Testing minimal visitor search...")
     jobs_data = await make_graphql_request(scraper, graphql_payload_minimal, "MinimalSearch")
     return jobs_data

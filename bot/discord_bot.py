@@ -1,49 +1,8 @@
 # --- ADVANCED JOB SEARCH RUNNER ---
 import asyncio
 import os
-def is_job_very_recent(created_datetime, max_minutes=5):
-    """Check if a job was posted within the last 60 seconds"""
-    from datetime import datetime, timezone
-    
-    if not created_datetime or created_datetime == 'Unknown':
-        return False
+from datetime import datetime, timezone, timedelta
 
-    now = datetime.now(timezone.utc)
-    dt = None
-    try:
-        # If it's a datetime object
-        if hasattr(created_datetime, 'strftime'):
-            dt = created_datetime
-            if not hasattr(dt, 'tzinfo') or dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        # If it's a timestamp (int or float)
-        elif isinstance(created_datetime, (int, float)):
-            dt = datetime.utcfromtimestamp(created_datetime).replace(tzinfo=timezone.utc)
-        # If it's a string
-        elif isinstance(created_datetime, str):
-            # Try ISO format
-            try:
-                dt = datetime.fromisoformat(created_datetime.replace('Z', '+00:00'))
-                if not hasattr(dt, 'tzinfo') or dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-            except Exception:
-                pass
-            if dt is None:
-                # Try parsing as float timestamp string
-                try:
-                    ts = float(created_datetime)
-                    dt = datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
-                except Exception:
-                    return False
-        if dt is None:
-            return False
-        # Calculate time difference in seconds
-        diff = (now - dt).total_seconds()
-        # Return True if job was posted within the last 60 seconds
-        return diff <= 60
-    except Exception as e:
-        print(f"[Advanced Search] Error checking job recency: {e}")
-        return False
 async def fetch_and_build_job_message(job, search_context=""):
     """
     Fetch job details and build a complete message with all information.
@@ -59,174 +18,143 @@ async def fetch_and_build_job_message(job, search_context=""):
     # Get formatted posting time for display
     posted_time = format_posted_time(job.get('createdDateTime'))
     
-    # Build basic job message
+    # Build basic job message with REAL-TIME indicator
     job_msg = (
-        "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
-        f"(V2)🚨 **{job['title']}** \n"
+        f"** JOB ALERT** \n"
+        f"**{job['title']}** \n"
         f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
         f"\n"
-        f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
-        f"⚡ **Posted**: {posted_time} \n"
-        f"🕒 **Sent to Discord at:** {datetime.now().strftime('%H:%M')} UTC\n"
+        f"**Budget:** {job.get('budget', 'N/A')}\n"
+        f"**Posted on Upwork**: {posted_time} \n"
+        f"**Detected at:** {datetime.now().strftime('%H:%M:%S')} UTC\n"
     )
     if skills:
-        job_msg += f"🎯 **Key Skills:** `{skill_display}`\n"
+        job_msg += f"**Key Skills:** `{skill_display}`\n"
     job_msg += (
-        f"🌐 [Open Job]({job_url})\n"
-        f"📊 **Found by keyword:** `{search_context}` \n"
+        f"[Open Job]({job_url})\n"
+        f"**Found by keyword:** `{search_context}` \n"
     )
     
     # FETCH JOB DETAILS (with auto auth refresh)
     job_details_response = None
     if job_id:
         try:
-            print(f"[Pre-fetch] Fetching details for job ID: {job_id}")
+            print(f"[Real-time] Fetching details for job ID: {job_id}")
             
-            # This will auto-refresh auth on 401 errors
             job_details_response = await asyncio.wait_for(
                 scraper.fetch_job_details(job_id),
                 timeout=45
             )
             
             if job_details_response:
-                # Check if response indicates auth failure
                 if isinstance(job_details_response, dict):
                     title = job_details_response.get('title', '')
                     if 'Authentication Required' in title or 'authentication error' in title.lower():
-                        print(f"[Pre-fetch] ⚠️ Job details fetch failed due to auth - skipping this job")
-                        return None  # Signal to skip this job
+                        print(f"[Real-time] ⚠️ Job details fetch failed due to auth - skipping this job")
+                        return None
                 
-                print(f"[Pre-fetch] ✅ Job details fetched successfully")
+                print(f"[Real-time] ✅ Job details fetched successfully")
             else:
-                print(f"[Pre-fetch] ⚠️ No job details returned")
+                print(f"[Real-time] ⚠️ No job details returned")
                 
         except asyncio.TimeoutError:
-            print(f"[Pre-fetch] ⏰ Job details request timed out")
+            print(f"[Real-time] ⏰ Job details request timed out")
         except Exception as detail_error:
-            print(f"[Pre-fetch] ❌ Error fetching job details: {detail_error}")
+            print(f"[Real-time] ❌ Error fetching job details: {detail_error}")
     
     # ADD DETAILED INFORMATION TO THE MESSAGE
     if job_details_response and isinstance(job_details_response, dict):
         job_msg += "\n\n**📋 DETAILED JOB INFORMATION:**\n"
         
-        # Project Details Section
         job_msg += "```"
         if job_details_response.get('job_type'):
-            job_msg += f"\n💼 Job Type: {job_details_response['job_type']}"
+            job_msg += f"\nJob Type: {job_details_response['job_type']}"
         if job_details_response.get('engagement_duration'):
-            job_msg += f"\n⏳ Duration: {job_details_response['engagement_duration']}"
-        # if job_details_response.get('category'):
-        #     job_msg += f"\n📂 Category: {job_details_response['category']}"
+            job_msg += f"\nDuration: {job_details_response['engagement_duration']}"
         job_msg += "\n```\n"
         
-        # Client Information Section
-        job_msg += "**👤 CLIENT INFORMATION:**\n```"
+        job_msg += "**CLIENT INFORMATION:**\n```"
         if job_details_response.get('client_location'):
-            job_msg += f"\n📍 Location: {job_details_response['client_location']}"
+            job_msg += f"\nLocation: {job_details_response['client_location']}"
         
-        # Handle client_total_spent properly
         client_total_spent = job_details_response.get('client_total_spent')
         if client_total_spent is not None and client_total_spent != "":
             try:
                 spent_amount = float(client_total_spent)
-                if spent_amount > 0:
-                    spent_display = f"${spent_amount:,.0f}"
-                else:
-                    spent_display = "$0"
+                spent_display = f"${spent_amount:,.0f}" if spent_amount > 0 else "$0"
             except (ValueError, TypeError):
                 spent_display = str(client_total_spent)
         else:
             spent_display = "Not disclosed"
-        job_msg += f"\n💸 Total Spent: {spent_display}"
+        job_msg += f"\nTotal Spent: {spent_display}"
         
         payment_verified = job_details_response.get('payment_verified', False)
-        job_msg += f"\n{'✅' if payment_verified else '❌'} Payment Verified: {'Yes' if payment_verified else 'No'}"
+        job_msg += f"\nPayment Verified: {'Yes' if payment_verified else 'No'}"
         job_msg += "\n```"
-    
+        job_msg += "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
+
     return job_msg
 
 
 async def process_single_search(search):
-    """Process a single job search independently and asynchronously"""
+    """
+    Process a single job search - MODIFIED FOR REAL-TIME DETECTION
+    Posts ALL new jobs that haven't been seen before, regardless of posting time
+    """
     try:
         channel = bot.get_channel(search["channel_id"])
         if channel is None:
-            print(f"[Advanced Search] Channel not found for {search['category']} - {search['keyword']} (ID: {search['channel_id']})")
+            print(f"[Real-time] Channel not found for {search['category']} - {search['keyword']} (ID: {search['channel_id']})")
             return
         
-        print(f"[Advanced Search] Searching for: {search['keyword']} in category: {search['category']}")
+        print(f"[Real-time] Checking for new jobs: {search['keyword']} in category: {search['category']}")
         
         # Fetch jobs for this specific keyword
         jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
         
         if not jobs:
-            print(f"[Advanced Search] No jobs found for keyword: {search['keyword']}")
             return
 
-        # Filter for very recent jobs (posted within last 60 seconds)
-        recent_jobs = []
+        # REAL-TIME LOGIC: Post ANY job we haven't seen before AND was posted within 5 minutes
+        # Filter by both "not seen" and "posted within 5 minutes"
+        new_jobs = []
         for job in jobs:
-            if is_job_very_recent(job.get('createdDateTime'), max_minutes=5):
-                recent_jobs.append(job)
-        
-        if not recent_jobs:
-            print(f"[Advanced Search] No recent jobs (within 60 seconds) found for keyword: {search['keyword']}")
-            return
-        
-        print(f"[Advanced Search] Found {len(recent_jobs)} recent jobs for keyword: {search['keyword']}")
-
-        # FILTER FOR KEYWORD RELEVANCE
-        keyword_lower = search['keyword'].lower()
-        keyword_words = set(keyword_lower.replace('-', ' ').split())
-        
-        relevant_jobs = []
-        for job in recent_jobs:
-            title = job.get('title', '').lower()
-            description = job.get('description', '').lower()
-            skills = [s.lower() for s in job.get('skills', [])]
-            skills_text = ' '.join(skills)
-            searchable_text = f"{title} {description} {skills_text}"
-            
-            if len(keyword_words) > 1:
-                if all(word in searchable_text for word in keyword_words):
-                    relevant_jobs.append(job)
-                    print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
-                else:
-                    print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Missing keyword words")
-            else:
-                if keyword_lower in searchable_text:
-                    relevant_jobs.append(job)
-                    print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
-                else:
-                    print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Keyword not found")
-        
-        if not relevant_jobs:
-            print(f"[Advanced Search] No relevant jobs found after keyword filtering for: {search['keyword']}")
-            return
-        
-        print(f"[Advanced Search] {len(relevant_jobs)} jobs passed keyword filtering for: {search['keyword']}")
-
-        # Filter only unique relevant jobs
-        unique_jobs = []
-        for job in relevant_jobs:
             job_id = job.get('id')
-            if job_id and job_id not in sent_job_ids:
-                unique_jobs.append(job)
-                sent_job_ids.add(job_id)
+            
+            # Skip if we've already posted this job
+            if job_id and job_id in sent_job_ids:
+                continue
+            
+            # Check if job was posted within the last 5 minutes
+            if not is_job_posted_within_minutes(job.get('createdDateTime'), 5):
+                print(f"[Real-time] Skipping job '{job.get('title', 'Unknown')[:30]}...' - posted more than 5 minutes ago")
+                continue
+            
+            # This is a new job we haven't seen before AND was posted within 5 minutes
+            if job_id:
+                new_jobs.append(job)
+                sent_job_ids.add(job_id)  # Mark as seen immediately
+                print(f"[Real-time] Found new job within 5 minutes: '{job.get('title', 'Unknown')[:30]}...'")
+        
+        if not new_jobs:
+            # No new jobs found in this search that were posted within 5 minutes
+            return
+        
+        print(f"[Real-time] Found {len(new_jobs)} NEW jobs posted within 5 minutes for keyword: {search['keyword']}")
 
-        # Send up to 3 unique relevant jobs per keyword
+        # Post new jobs (limit to 3 per search cycle to avoid spam)
         posted_count = 0
-        for i, job in enumerate(unique_jobs[:3], 1):
-            # Try to store job in database, skip if duplicate
+        for job in new_jobs[:3]:
+            # Try to store job in database to prevent duplicates across restarts
             try:
                 if hasattr(scraper, 'store_job_in_db'):
                     scraper.store_job_in_db(job)
             except Exception as db_exc:
                 if 'duplicate' in str(db_exc).lower() or 'unique constraint' in str(db_exc).lower():
-                    print(f"[Advanced Search] Skipping duplicate job ID: {job.get('id')}")
+                    print(f"[Real-time] Job already in database: {job.get('id')}")
                     continue
                 else:
-                    print(f"[Advanced Search] DB error: {db_exc}")
+                    print(f"[Real-time] DB error: {db_exc}")
                     continue
 
             # BUILD COMPLETE MESSAGE WITH ALL DETAILS
@@ -234,341 +162,60 @@ async def process_single_search(search):
             
             # Skip if auth failed
             if complete_message is None:
-                print(f"[Advanced Search] Skipping job due to auth failure")
+                print(f"[Real-time] Skipping job due to auth failure")
                 continue
             
-            # POST COMPLETE MESSAGE TO DISCORD (single message with all info)
+            # POST COMPLETE MESSAGE TO DISCORD
             try:
                 await channel.send(complete_message)
                 posted_count += 1
-                print(f"[Post] ✅ Complete job message posted to Discord")
-                await asyncio.sleep(2)  # avoid rate limits
+                print(f"[Real-time] Posted NEW job (within 5 min): {job.get('title', 'Unknown')[:50]}...")
+                await asyncio.sleep(2)  # Rate limit protection
             except Exception as post_error:
-                print(f"[Post] ❌ Error posting message: {post_error}")
+                print(f"[Real-time] Error posting message: {post_error}")
             
         if posted_count > 0:
-            print(f"[Advanced Search] Posted {posted_count} complete job messages for keyword: {search['keyword']}")
-        else:
-            print(f"[Advanced Search] No jobs posted for keyword: {search['keyword']}")
+            print(f"[Real-time] Posted {posted_count} new jobs (within 5 min) for: {search['keyword']}")
             
     except Exception as e:
-        error_msg = f"❌ Error searching recent jobs for **{search['keyword']}** in {search['category']}: {e}"
+        error_msg = f"Error in real-time job detection for **{search['keyword']}**: {e}"
         try:
             channel = bot.get_channel(search["channel_id"])
             if channel:
                 await channel.send(error_msg)
         except:
             pass
-        print(f"[Advanced Search] Error in {search['keyword']}: {e}")
-# async def post_job_with_auto_details(channel, job, msg_content, search_context=""):
-#     """
-#     IMPROVED: Fetch job details FIRST (with auto 401 refresh), 
-#     then post job message with details included in the main message.
-#     This ensures auth refresh happens BEFORE posting to Discord.
-#     """
-#     try:
-#         # STEP 1: Fetch job details FIRST (before posting anything to Discord)
-#         job_id = job.get('id') or job.get('ciphertext')
-#         job_details_response = None
-        
-#         if job_id:
-#             try:
-#                 print(f"[Pre-fetch] Fetching details for job ID: {job_id} BEFORE posting to Discord")
-                
-#                 # This will auto-refresh auth on 401 errors
-#                 job_details_response = await asyncio.wait_for(
-#                     scraper.fetch_job_details(job_id),
-#                     timeout=45  # Increased timeout to allow for auth refresh
-#                 )
-                
-#                 if job_details_response:
-#                     # Check if response indicates auth failure
-#                     if isinstance(job_details_response, dict):
-#                         title = job_details_response.get('title', '')
-#                         if 'Authentication Required' in title or 'authentication error' in title.lower():
-#                             print(f"[Pre-fetch] ⚠️ Job details fetch failed due to auth - skipping this job post")
-#                             return  # Don't post job if auth failed
-                    
-#                     print(f"[Pre-fetch] ✅ Job details fetched successfully, now building enhanced message")
-#                 else:
-#                     print(f"[Pre-fetch] ⚠️ No job details returned, will post with basic info only")
-                    
-#             except asyncio.TimeoutError:
-#                 print(f"[Pre-fetch] ⏰ Job details request timed out (may have included auth refresh)")
-#                 # Continue with posting anyway
-#             except Exception as detail_error:
-#                 print(f"[Pre-fetch] ❌ Error pre-fetching job details: {detail_error}")
-#                 # Continue with posting anyway
-        
-#         # STEP 2: Build enhanced message with job details included
-#         enhanced_msg = msg_content
-        
-#         if job_details_response and isinstance(job_details_response, dict):
-#             # Add detailed information to the main message
-#             enhanced_msg += "\n\n**📋 DETAILED JOB INFORMATION:**\n"
-            
-#             # Project Details Section
-#             enhanced_msg += "```"
-#             if job_details_response.get('job_type'):
-#                 enhanced_msg += f"\n💼 Job Type: {job_details_response['job_type']}"
-#             if job_details_response.get('engagement_duration'):
-#                 enhanced_msg += f"\n⏳ Duration: {job_details_response['engagement_duration']}"
-#             if job_details_response.get('category'):
-#                 enhanced_msg += f"\n📂 Category: {job_details_response['category']}"
-#             enhanced_msg += "\n```\n"
-            
-#             # Client Information Section
-#             enhanced_msg += "**👤 CLIENT INFORMATION:**\n```"
-#             if job_details_response.get('client_location'):
-#                 enhanced_msg += f"\n📍 Location: {job_details_response['client_location']}"
-            
-#             # Handle client_total_spent properly
-#             client_total_spent = job_details_response.get('client_total_spent')
-#             if client_total_spent is not None and client_total_spent != "":
-#                 try:
-#                     spent_amount = float(client_total_spent)
-#                     if spent_amount > 0:
-#                         spent_display = f"${spent_amount:,.0f}"
-#                     else:
-#                         spent_display = "$0"
-#                 except (ValueError, TypeError):
-#                     spent_display = str(client_total_spent)
-#             else:
-#                 spent_display = "Not disclosed"
-#             enhanced_msg += f"\n💸 Total Spent: {spent_display}"
-            
-#             # if job_details_response.get('client_industry'):
-#             #     enhanced_msg += f"\n🏢 Industry: {job_details_response['client_industry']}"
-#             # if job_details_response.get('client_company_size'):
-#             #     enhanced_msg += f"\n👥 Company Size: {job_details_response['client_company_size']}"
-            
-#             payment_verified = job_details_response.get('payment_verified', False)
-#             enhanced_msg += f"\n{'✅' if payment_verified else '❌'} Payment Verified: {'Yes' if payment_verified else 'No'}"
-#             enhanced_msg += "\n```\n"
-            
-#             # Requirements Section
-#             # if (job_details_response.get('min_job_success_score') or 
-#             #     job_details_response.get('min_hours') or 
-#             #     job_details_response.get('english_requirement', 'ANY') != 'ANY' or
-#             #     job_details_response.get('portfolio_required', False) or
-#             #     job_details_response.get('rising_talent', False)):
-                
-#             #     enhanced_msg += "**📋 REQUIREMENTS:**\n```"
-#             #     if job_details_response.get('min_job_success_score'):
-#             #         enhanced_msg += f"\n⭐ Min Success Score: {job_details_response['min_job_success_score']}%"
-#             #     if job_details_response.get('min_hours'):
-#             #         enhanced_msg += f"\n🕐 Min Platform Hours: {job_details_response['min_hours']}"
-#             #     if job_details_response.get('min_hours_week'):
-#             #         enhanced_msg += f"\n📅 Min Hours/Week: {job_details_response['min_hours_week']}"
-#             #     if job_details_response.get('portfolio_required', False):
-#             #         enhanced_msg += f"\n📁 Portfolio Required: Yes"
-#             #     if job_details_response.get('rising_talent', False):
-#             #         enhanced_msg += f"\n🌟 Rising Talent: Welcome"
-#             #     if job_details_response.get('english_requirement', 'ANY') != 'ANY':
-#             #         enhanced_msg += f"\n🗣️ English: {job_details_response['english_requirement']}"
-#             #     enhanced_msg += "\n```\n"
-            
-#             # Tools & Skills Section
-#             # tools = job_details_response.get('tools', [])
-#             # if tools:
-#             #     tools_display = ' • '.join(tools[:15])
-#             #     if len(tools) > 15:
-#             #         tools_display += f" • +{len(tools) - 15} more"
-#             #     enhanced_msg += f"**🛠️ TOOLS & PLATFORMS ({len(tools)} total):**\n`{tools_display}`\n\n"
-            
-#             # Additional Info
-#             # if job_details_response.get('deliverables'):
-#             #     deliverables = job_details_response['deliverables'][:200]
-#             #     if len(job_details_response['deliverables']) > 200:
-#             #         deliverables += "..."
-#             #     enhanced_msg += f"**📦 DELIVERABLES:**\n{deliverables}\n\n"
-            
-#             # Competition Stats
-#             # enhanced_msg += "**📊 COMPETITION STATS:**\n```"
-#             # if job_details_response.get('total_applicants'):
-#             #     enhanced_msg += f"\n📝 Proposals: {job_details_response['total_applicants']}"
-#             # if job_details_response.get('total_interviewed'):
-#             #     enhanced_msg += f"\n💬 Interviewing: {job_details_response['total_interviewed']}"
-#             # if job_details_response.get('total_hired'):
-#             #     enhanced_msg += f"\n✅ Hired: {job_details_response['total_hired']}"
-#             # enhanced_msg += "\n```"
-        
-#         # STEP 3: Post the enhanced message to Discord
-#         job_message = await channel.send(enhanced_msg)
-#         print(f"[Post] ✅ Enhanced job message posted to Discord with detailed information")
-            
-#     except Exception as e:
-#         print(f"[Post] ❌ Error posting job with auto details: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         # Don't post anything if there's an error to avoid partial posts
+        print(f"[Real-time] Error in {search['keyword']}: {e}")
 
-# # Insert this updated function into your Discord bot file, replacing the existing post_job_with_auto_details function
-# # The rest of your Discord bot code remains the same
-
-# async def process_single_search(search):
-#     """Process a single job search independently and asynchronously"""
-#     try:
-#         channel = bot.get_channel(search["channel_id"])
-#         if channel is None:
-#             print(f"[Advanced Search] Channel not found for {search['category']} - {search['keyword']} (ID: {search['channel_id']})")
-#             return
-        
-#         print(f"[Advanced Search] Searching for: {search['keyword']} in category: {search['category']}")
-        
-#         # Fetch jobs for this specific keyword
-#         jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
-        
-#         if not jobs:
-#             print(f"[Advanced Search] No jobs found for keyword: {search['keyword']}")
-#             return
-
-#         # Filter for very recent jobs (posted within last 60 seconds)
-#         recent_jobs = []
-#         for job in jobs:
-#             if is_job_very_recent(job.get('createdDateTime'), max_minutes=5):
-#                 recent_jobs.append(job)
-        
-#         # If no very recent jobs, skip this search
-#         if not recent_jobs:
-#             print(f"[Advanced Search] No recent jobs (within 60 seconds) found for keyword: {search['keyword']}")
-#             return
-        
-#         print(f"[Advanced Search] Found {len(recent_jobs)} recent jobs for keyword: {search['keyword']}")
-
-#         # ===== NEW: FILTER FOR KEYWORD RELEVANCE =====
-#         keyword_lower = search['keyword'].lower()
-        
-#         # Extract individual words from keyword for better matching
-#         keyword_words = set(keyword_lower.replace('-', ' ').split())
-        
-#         # Filter jobs that actually match the keyword
-#         relevant_jobs = []
-#         for job in recent_jobs:
-#             title = job.get('title', '').lower()
-#             description = job.get('description', '').lower()
-#             skills = [s.lower() for s in job.get('skills', [])]
-#             skills_text = ' '.join(skills)
-            
-#             # Combine all searchable text
-#             searchable_text = f"{title} {description} {skills_text}"
-            
-#             # Check if keyword appears in searchable text
-#             # For multi-word keywords, check if all words appear
-#             if len(keyword_words) > 1:
-#                 # All words must appear (allows for variations like "browser" and "fingerprint")
-#                 if all(word in searchable_text for word in keyword_words):
-#                     relevant_jobs.append(job)
-#                     print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
-#                 else:
-#                     print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Missing keyword words")
-#             else:
-#                 # Single word keyword - direct match
-#                 if keyword_lower in searchable_text:
-#                     relevant_jobs.append(job)
-#                     print(f"[Filter] ✓ MATCH: '{job.get('title', 'No title')[:50]}...'")
-#                 else:
-#                     print(f"[Filter] ✗ REJECT: '{job.get('title', 'No title')[:50]}...' - Keyword not found")
-        
-#         # If no relevant jobs after filtering, skip
-#         if not relevant_jobs:
-#             print(f"[Advanced Search] No relevant jobs found after keyword filtering for: {search['keyword']}")
-#             return
-        
-#         print(f"[Advanced Search] {len(relevant_jobs)} jobs passed keyword filtering for: {search['keyword']}")
-#         # ===== END KEYWORD FILTERING =====
-
-#         # Filter only unique relevant jobs
-#         unique_jobs = []
-#         for job in relevant_jobs:
-#             job_id = job.get('id')
-#             if job_id and job_id not in sent_job_ids:
-#                 unique_jobs.append(job)
-#                 sent_job_ids.add(job_id)
-
-#         # Send up to 3 unique relevant jobs per keyword
-#         for i, job in enumerate(unique_jobs[:3], 1):
-#             # Try to store job in database, skip if duplicate
-#             try:
-#                 if hasattr(scraper, 'store_job_in_db'):
-#                     scraper.store_job_in_db(job)
-#             except Exception as db_exc:
-#                 if 'duplicate' in str(db_exc).lower() or 'unique constraint' in str(db_exc).lower():
-#                     print(f"[Advanced Search] Skipping duplicate job ID: {job.get('id')}")
-#                     continue
-#                 else:
-#                     print(f"[Advanced Search] DB error: {db_exc}")
-#                     continue
-
-#             job_url = build_job_url(job.get('id'))
-#             skills = job.get('skills', [])
-#             skill_display = " • ".join(skills[:8])
-#             if len(skills) > 8:
-#                 skill_display += f" • +{len(skills) - 8} more"
-            
-#             # Get formatted posting time for display
-#             posted_time = format_posted_time(job.get('createdDateTime'))
-            
-#             job_msg = (
-#                 "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n"
-#                 f"(V2)🚨 **{job['title']}** \n"
-#                 f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
-#                 f"\n"
-#                 f"💰 **Budget:** {job.get('budget', 'N/A')}\n"
-#                 f"⚡ **Posted**: {posted_time} \n"
-#                 f"🕒 **Sent to Discord at:** {datetime.now().strftime('%H:%M')} UTC\n"
-#             )
-#             if skills:
-#                 job_msg += f"🎯 **Key Skills:** `{skill_display}`\n"
-#             job_msg += (
-#                 f"🌐 [Open Job]({job_url})\n"
-#                 f"📊 **Found by keyword:** `{search['keyword']}` in **{search['category']}** \n"
-#             )
-            
-#             # Post job with automatic details in thread
-#             await post_job_with_auto_details(channel, job, job_msg, f"Advanced Search: {search['keyword']}")
-#             await asyncio.sleep(2)  # avoid rate limits
-            
-#         if unique_jobs:
-#             print(f"[Advanced Search] Posted {len(unique_jobs[:3])} relevant jobs for keyword: {search['keyword']}")
-#         else:
-#             print(f"[Advanced Search] No unique relevant jobs to post for keyword: {search['keyword']}")
-            
-#     except Exception as e:
-#         error_msg = f"❌ Error searching recent jobs for **{search['keyword']}** in {search['category']}: {e}"
-#         try:
-#             channel = bot.get_channel(search["channel_id"])
-#             if channel:
-#                 await channel.send(error_msg)
-#         except:
-#             pass
-#         print(f"[Advanced Search] Error in {search['keyword']}: {e}")
 
 async def run_advanced_job_searches():
-    """Run all job searches concurrently and independently"""
+    """
+    Run all job searches concurrently - OPTIMIZED FOR REAL-TIME DETECTION
+    Checks frequently to catch new jobs as soon as they're posted within 5 minutes
+    """
     await bot.wait_until_ready()
-    print("[Advanced Search] Starting advanced job searches (ASYNC MODE)...")
+    print("[Real-time] Starting REAL-TIME job monitoring system...")
+    print("[Real-time] Jobs will be posted as soon as they appear on Upwork (within 5 minutes)")
     
-    # Create a list of tasks for all searches
+    # Create tasks for all searches
     search_tasks = []
     for search in ADVANCED_JOB_SEARCHES:
-        # Create a task for each search
         task = asyncio.create_task(process_single_search(search))
         search_tasks.append(task)
     
     # Run all searches concurrently
-    print(f"[Advanced Search] Running {len(search_tasks)} searches concurrently...")
+    print(f"[Real-time] Running {len(search_tasks)} searches in real-time mode...")
     
-    # Use gather with return_exceptions=True to prevent one failure from stopping others
+    # Use gather with return_exceptions to prevent one failure from stopping others
     results = await asyncio.gather(*search_tasks, return_exceptions=True)
     
-    # Log any errors that occurred
+    # Log any errors
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             search = ADVANCED_JOB_SEARCHES[i]
-            print(f"[Advanced Search] Error in search '{search['keyword']}': {result}")
+            print(f"[Real-time] Error in search '{search['keyword']}': {result}")
     
-    print(f"[Advanced Search] Completed all {len(search_tasks)} concurrent searches")
+    print(f"[Real-time] Completed scan of {len(search_tasks)} keywords")
 
 import discord
 from discord.ext import commands, tasks
@@ -754,6 +401,52 @@ def build_job_details_embed(job_details):
     )
 
     return embed
+
+def is_job_posted_within_minutes(created_datetime, minutes=5):
+    """Check if job was posted within the specified number of minutes."""
+    from datetime import datetime, timezone
+    if not created_datetime or created_datetime == 'Unknown':
+        return False
+    
+    now = datetime.now(timezone.utc)
+    dt = None
+    
+    try:
+        # If it's a datetime object
+        if hasattr(created_datetime, 'strftime'):
+            dt = created_datetime
+            if not hasattr(dt, 'tzinfo') or dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        # If it's a timestamp (int or float)
+        elif isinstance(created_datetime, (int, float)):
+            dt = datetime.utcfromtimestamp(created_datetime).replace(tzinfo=timezone.utc)
+        # If it's a string
+        elif isinstance(created_datetime, str):
+            # Try ISO format
+            try:
+                dt = datetime.fromisoformat(created_datetime.replace('Z', '+00:00'))
+                if not hasattr(dt, 'tzinfo') or dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+            if dt is None:
+                # Try parsing as float timestamp string
+                try:
+                    ts = float(created_datetime)
+                    dt = datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+        
+        if dt is None:
+            return False
+        
+        # Calculate time difference
+        diff = now - dt
+        minutes_ago = diff.total_seconds() / 60
+        return minutes_ago <= minutes
+        
+    except Exception:
+        return False
 
 def format_posted_time(created_datetime):
     """Format the posting time as 'X mins ago', 'Y secs ago', etc."""
