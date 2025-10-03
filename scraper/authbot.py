@@ -310,8 +310,12 @@ def get_upwork_headers():
             chrome_path = chrome_bins[0]
             print(f"[Auth Bot] Using Chromium for CDP: {chrome_path}")
 
+            # Hint SeleniumBase about Chromium binary path (best effort)
+            os.environ.setdefault("SB_CHROME_BINARY", chrome_path)
+            os.environ.setdefault("CHROME_BINARY", chrome_path)
+
             try:
-                with SB(cdp=True, headless=True, locale="en", page_load_strategy="eager") as sb:
+                with SB(browser="chrome", headless=True, locale="en", page_load_strategy="eager") as sb:
                     url = "https://www.upwork.com/nx/search/jobs/?q=python"
                     sb.activate_cdp_mode(url)
 
