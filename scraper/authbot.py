@@ -237,11 +237,9 @@ def get_upwork_headers():
                 with SB(uc=False, test=True, locale="en", headless=True,
                         browser=browser, page_load_strategy="eager") as sb:
                     
-                    # Add Linux-specific browser arguments after initialization
+                    # Skip CDP commands for Firefox as it doesn't support them
                     if os_name == "linux":
-                        # These will be handled by SeleniumBase internally
-                        sb.driver.execute_cdp_cmd('Runtime.enable', {})
-                        print("[Auth Bot] ✅ Linux-specific optimizations applied")
+                        print("[Auth Bot] ✅ Linux Firefox mode - no CDP needed")
                     
                     url = "https://www.upwork.com/nx/search/jobs/?q=python"
                     sb.open(url)  # Use regular open instead of CDP mode for Firefox

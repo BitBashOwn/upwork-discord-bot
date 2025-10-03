@@ -65,12 +65,15 @@ def get_upwork_headers_ubuntu():
             with SB(**browser_options) as sb:
                 print("[Ubuntu Bot] Browser started successfully")
                 
-                # Apply Linux-specific optimizations after browser starts
-                try:
-                    sb.driver.execute_cdp_cmd('Runtime.enable', {})
-                    print("[Ubuntu Bot] ✅ Linux optimizations applied")
-                except Exception:
-                    print("[Ubuntu Bot] ⚠️ Optimizations not available, continuing...")
+                # Skip CDP commands for Firefox, use only for Chrome  
+                if browser == "chrome":
+                    try:
+                        sb.driver.execute_cdp_cmd('Runtime.enable', {})
+                        print("[Ubuntu Bot] ✅ Chrome optimizations applied")
+                    except Exception:
+                        print("[Ubuntu Bot] ⚠️ Chrome optimizations not available, continuing...")
+                elif browser == "firefox":
+                    print("[Ubuntu Bot] ✅ Firefox mode - no CDP commands needed")
                 
                 # Navigate to Upwork
                 url = "https://www.upwork.com/nx/search/jobs/?q=python"
