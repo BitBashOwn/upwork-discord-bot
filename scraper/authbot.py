@@ -43,10 +43,11 @@ def test_job_details_fetch(headers, cookies):
     
     try:
         import cloudscraper
+        # Use Firefox user agent to match our browser choice
         session = cloudscraper.create_scraper(
-            browser={"browser": "firefox", "platform": "windows", "mobile": False}
+            browser={"browser": "firefox", "platform": "linux", "mobile": False}
         )
-        print("[Test] Using cloudscraper session")
+        print("[Test] Using cloudscraper session with Firefox")
     except ImportError:
         import requests
         session = requests.Session()
@@ -209,211 +210,382 @@ def get_upwork_headers():
     headers_found = None
     cookies_found = None
     
-    try:
-        print("[Auth Bot] Starting browser (Cloudflare bypass enabled)...")
+    # Detect OS and set appropriate browser order
+    import platform
+    os_name = platform.system().lower()
+    
+    if os_name == "linux":
+        # On Linux, prefer Firefox as it's more commonly available
+        browsers_to_try = ["firefox", "chrome"]
+        print(f"[Auth Bot] Detected Linux - using Firefox-first strategy")
+    else:
+        # On Windows/Mac, Chrome first
+        browsers_to_try = ["chrome", "firefox"]
+        print(f"[Auth Bot] Detected {os_name} - using Chrome-first strategy")
+    
+    for browser in browsers_to_try:
+        print(f"[Auth Bot] Starting {browser.title()} browser (Cloudflare bypass enabled)...")
         
-        # Optimized browser settings for speed
-        with SB(uc=True, test=True, locale="en", headless=True, 
-                page_load_strategy="eager") as sb:
-            
-            url = "https://www.upwork.com/nx/search/jobs/?q=python"
-            sb.activate_cdp_mode(url)
-            
-            print("[Auth Bot] Waiting for Cloudflare bypass...")
-            
-            # Efficient Cloudflare bypass with reduced wait times
-            max_attempts = 8
-            for attempt in range(max_attempts):
-                sb.sleep(3)  # Reduced from 20 to 3 seconds
-                
-                # Try clicking captcha if present
-                try:
-                    sb.uc_gui_click_captcha()
-                    print(f"[Auth Bot] Attempt {attempt+1}: Clicked captcha")
-                except Exception:
-                    pass
-                
-                # Quick check if bypassed
-                if sb.is_element_visible(".air3-card"):
-                    print("[Auth Bot] ✅ Cloudflare bypassed!")
-                    break
-                
-                page_source = sb.get_page_source()
-                if "Just a moment" not in page_source:
-                    print("[Auth Bot] ✅ Challenge bypassed!")
-                    break
-            else:
-                print("[Auth Bot] ⚠️ Cloudflare challenge timeout - continuing anyway")
-
-            # Wait for job cards with timeout
-            print("[Auth Bot] Loading job listings...")
-            try:
-                sb.wait_for_element(".air3-card", timeout=15)
-                print("[Auth Bot] ✅ Jobs loaded")
-                sb.sleep(5)  # Reduced from 180 to 5 seconds
-            except Exception:
-                print("[Auth Bot] ⚠️ Job cards timeout - checking page...")
-                current_url = sb.get_current_url()
-                print(f"[Auth Bot] Current URL: {current_url}")
-
-            # Inject network monitor
-            print("[Auth Bot] Injecting network monitor...")
-            monitor_script = """
-            window.capturedRequests = [];
-            
-            // Intercept fetch
-            const originalFetch = window.fetch;
-            window.fetch = function(...args) {
-                const url = args[0];
-                const options = args[1] || {};
-                if (typeof url === 'string' && url.includes('visitorJobSearch')) {
-                    window.capturedRequests.push({
-                        url: url,
-                        headers: options.headers || {},
-                        method: options.method || 'GET',
-                        type: 'fetch'
-                    });
+        # Browser settings optimized for speed and compatibility
+        # Note: UC mode only works with Chrome, so disable it for Firefox
+        use_uc = (browser == "chrome")
+        
+        try:
+            # Enhanced Firefox configuration for Linux servers
+            if browser == "firefox":
+                # Firefox options for better Linux compatibility
+                firefox_options = {
+                    "uc": False, 
+                    "test": True, 
+                    "locale": "en", 
+                    "headless": True,
+                    "browser": browser, 
+                    "page_load_strategy": "eager"
                 }
-                return originalFetch.apply(this, args);
-            };
-            
-            // Intercept XHR
-            const originalXHROpen = XMLHttpRequest.prototype.open;
-            const originalXHRSend = XMLHttpRequest.prototype.send;
-            const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-            
-            XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
-                this._method = method;
-                this._url = url;
-                this._headers = {};
-                return originalXHROpen.apply(this, arguments);
-            };
-            
-            XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-                this._headers[header] = value;
-                return originalSetHeader.call(this, header, value);
-            };
-            
-            XMLHttpRequest.prototype.send = function(data) {
-                if (this._url && this._url.includes('visitorJobSearch')) {
-                    window.capturedRequests.push({
-                        url: this._url,
-                        method: this._method,
-                        headers: this._headers || {},
-                        data: data,
-                        type: 'xhr'
-                    });
-                }
-                return originalXHRSend.apply(this, arguments);
-            };
-            """
-            sb.execute_script(monitor_script)
-            print("[Auth Bot] ✅ Network monitor active")
-
-            # Find and click page 2
-            print("[Auth Bot] Looking for pagination...")
-            page_2_selectors = [
-                'button[data-ev-page_index="2"]',
-                'a[data-ev-page_index="2"]',
-                'button[aria-label="Go to page 2"]',
-                '.pagination button:nth-child(3)',
-                'li[data-page="2"] button'
-            ]
-            
-            page_2_found = False
-            for selector in page_2_selectors:
-                try:
-                    if sb.is_element_visible(selector):
-                        sb.scroll_to_element(selector)
-                        sb.sleep(2)
-                        sb.click(selector)
-                        print(f"[Auth Bot] ✅ Clicked page 2: {selector}")
-                        page_2_found = True
-                        break
-                except Exception:
-                    continue
-
-            if not page_2_found:
-                print("[Auth Bot] ⚠️ Page 2 not found, trying JS click...")
-                try:
-                    sb.execute_script("""
-                        const pageBtn = document.querySelector('[data-ev-page_index="2"]');
-                        if (pageBtn) pageBtn.click();
-                    """)
-                    print("[Auth Bot] ✅ Clicked page 2 via JS")
-                except Exception as e:
-                    print(f"[Auth Bot] ❌ Could not click page 2: {e}")
-
-            # Wait for GraphQL request
-            print("[Auth Bot] Waiting for GraphQL request...")
-            sb.sleep(5)  # Reduced wait time
-
-            # Check captured requests
-            print("[Auth Bot] Analyzing network requests...")
-            try:
-                captured_requests = sb.execute_script("return window.capturedRequests || [];")
-                print(f"[Auth Bot] Captured {len(captured_requests)} requests")
                 
-                if captured_requests:
-                    latest_request = captured_requests[-1]
-                    headers_found = latest_request.get('headers', {})
+                # Add Linux-specific options
+                if os_name == "linux":
+                    firefox_options.update({
+                        "disable_gpu": True,
+                        "no_sandbox": True,
+                        "disable_dev_shm_usage": True
+                    })
+                
+                with SB(**firefox_options) as sb:
                     
-                    if not headers_found or len(headers_found) == 0:
-                        print("[Auth Bot] No headers captured, creating fallback...")
+                    url = "https://www.upwork.com/nx/search/jobs/?q=python"
+                    sb.open(url)  # Use regular open instead of CDP mode for Firefox
+                    
+                    print("[Auth Bot] Waiting for page load...")
+                    sb.sleep(5)
+                    
+                    # Handle Cloudflare for Firefox
+                    print("[Auth Bot] Checking for Cloudflare challenge...")
+                    max_attempts = 5
+                    for attempt in range(max_attempts):
+                        try:
+                            page_source = sb.get_page_source()
+                            if "Just a moment" in page_source or "Checking your browser" in page_source:
+                                print(f"[Auth Bot] Attempt {attempt+1}: Waiting for Cloudflare...")
+                                sb.sleep(5)
+                            else:
+                                print("[Auth Bot] ✅ No Cloudflare challenge detected")
+                                break
+                        except Exception:
+                            print(f"[Auth Bot] Attempt {attempt+1}: Page load issue, retrying...")
+                            sb.sleep(3)
+                    
+                    # Simple wait for job cards
+                    try:
+                        sb.wait_for_element(".air3-card", timeout=30)
+                        print("[Auth Bot] ✅ Jobs loaded")
+                    except Exception:
+                        print("[Auth Bot] ⚠️ Job cards timeout - continuing...")
+                        # Try alternative selectors
+                        try:
+                            sb.wait_for_element("[data-test='job-tile']", timeout=10)
+                            print("[Auth Bot] ✅ Alternative job selector found")
+                        except Exception:
+                            print("[Auth Bot] ⚠️ No job elements found, continuing with basic headers")
+                    
+                    # Get basic headers and cookies
+                    try:
                         user_agent = sb.execute_script("return navigator.userAgent;")
-                        headers_found = {
-                            'Accept': 'application/json, text/plain, */*',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Content-Type': 'application/json',
-                            'User-Agent': user_agent,
-                            'Referer': sb.get_current_url(),
-                            'Origin': 'https://www.upwork.com'
-                        }
+                        current_url = sb.get_current_url()
+                    except Exception:
+                        user_agent = "Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0"
+                        current_url = "https://www.upwork.com"
                     
-                    print(f"[Auth Bot] ✅ Headers captured from {latest_request.get('type', 'unknown')}")
-                else:
-                    print("[Auth Bot] No requests captured, using fallback headers...")
-                    user_agent = sb.execute_script("return navigator.userAgent;")
                     headers_found = {
                         'Accept': 'application/json, text/plain, */*',
                         'Accept-Language': 'en-US,en;q=0.9',
                         'Content-Type': 'application/json',
                         'User-Agent': user_agent,
-                        'Referer': sb.get_current_url(),
+                        'Referer': current_url,
                         'Origin': 'https://www.upwork.com'
                     }
                     
-            except Exception as e:
-                print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
+                    # Capture cookies
+                    try:
+                        cookies = {}
+                        for cookie in sb.get_cookies():
+                            cookies[cookie['name']] = cookie['value']
+                        cookies_found = cookies
+                        print(f"[Auth Bot] ✅ Captured {len(cookies)} cookies from Firefox")
+                    except Exception as e:
+                        print(f"[Auth Bot] ⚠️ Cookie error in Firefox: {e}")
+                        cookies_found = {}
+            
+            else:  # Chrome
+                # Chrome options with Linux compatibility
+                chrome_options = {
+                    "uc": use_uc, 
+                    "test": True, 
+                    "locale": "en", 
+                    "headless": True,
+                    "browser": browser, 
+                    "page_load_strategy": "eager"
+                }
+                
+                # Add Linux-specific Chrome options
+                if os_name == "linux":
+                    chrome_options.update({
+                        "disable_gpu": True,
+                        "no_sandbox": True,
+                        "disable_dev_shm_usage": True,
+                        "disable_extensions": True,
+                        "remote_debugging_port": 9222
+                    })
+                
+                with SB(**chrome_options) as sb:
+                    
+                    url = "https://www.upwork.com/nx/search/jobs/?q=python"
+                    sb.activate_cdp_mode(url)
+                    
+                    print("[Auth Bot] Waiting for Cloudflare bypass...")
+                    
+                    # Efficient Cloudflare bypass with reduced wait times
+                    max_attempts = 8
+                    for attempt in range(max_attempts):
+                        sb.sleep(3)  # Reduced from 20 to 3 seconds
+                        
+                        # Handle captcha based on browser type
+                        if browser == "chrome" and use_uc:
+                            try:
+                                sb.uc_gui_click_captcha()
+                                print(f"[Auth Bot] Attempt {attempt+1}: Clicked captcha (Chrome)")
+                            except Exception:
+                                pass
+                        else:
+                            print(f"[Auth Bot] Attempt {attempt+1}: Waiting for page load ({browser.title()})")
+                        
+                        # Quick check if bypassed
+                        try:
+                            if sb.is_element_visible(".air3-card"):
+                                print("[Auth Bot] ✅ Cloudflare bypassed!")
+                                break
+                        except Exception:
+                            pass
+                        
+                        try:
+                            page_source = sb.get_page_source()
+                            if "Just a moment" not in page_source:
+                                print("[Auth Bot] ✅ Challenge bypassed!")
+                                break
+                        except Exception:
+                            pass
+                    else:
+                        print("[Auth Bot] ⚠️ Cloudflare challenge timeout - continuing anyway")
+
+                    # Wait for job cards with timeout
+                    print("[Auth Bot] Loading job listings...")
+                    try:
+                        sb.wait_for_element(".air3-card", timeout=15)
+                        print("[Auth Bot] ✅ Jobs loaded")
+                        sb.sleep(5)  # Reduced from 180 to 5 seconds
+                    except Exception:
+                        print("[Auth Bot] ⚠️ Job cards timeout - checking page...")
+                        try:
+                            current_url = sb.get_current_url()
+                            print(f"[Auth Bot] Current URL: {current_url}")
+                        except Exception:
+                            print("[Auth Bot] Could not get current URL")
+
+                    # Inject network monitor
+                    print("[Auth Bot] Injecting network monitor...")
+                    monitor_script = """
+                    window.capturedRequests = [];
+                    
+                    // Intercept fetch
+                    const originalFetch = window.fetch;
+                    window.fetch = function(...args) {
+                        const url = args[0];
+                        const options = args[1] || {};
+                        if (typeof url === 'string' && url.includes('visitorJobSearch')) {
+                            window.capturedRequests.push({
+                                url: url,
+                                headers: options.headers || {},
+                                method: options.method || 'GET',
+                                type: 'fetch'
+                            });
+                        }
+                        return originalFetch.apply(this, args);
+                    };
+                    
+                    // Intercept XHR
+                    const originalXHROpen = XMLHttpRequest.prototype.open;
+                    const originalXHRSend = XMLHttpRequest.prototype.send;
+                    const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                    
+                    XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
+                        this._method = method;
+                        this._url = url;
+                        this._headers = {};
+                        return originalXHROpen.apply(this, arguments);
+                    };
+                    
+                    XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+                        this._headers[header] = value;
+                        return originalSetHeader.call(this, header, value);
+                    };
+                    
+                    XMLHttpRequest.prototype.send = function(data) {
+                        if (this._url && this._url.includes('visitorJobSearch')) {
+                            window.capturedRequests.push({
+                                url: this._url,
+                                method: this._method,
+                                headers: this._headers || {},
+                                data: data,
+                                type: 'xhr'
+                            });
+                        }
+                        return originalXHRSend.apply(this, arguments);
+                    };
+                    """
+                    try:
+                        sb.execute_script(monitor_script)
+                        print("[Auth Bot] ✅ Network monitor active")
+                    except Exception as e:
+                        print(f"[Auth Bot] ⚠️ Network monitor injection failed: {e}")
+
+                    # Find and click page 2
+                    print("[Auth Bot] Looking for pagination...")
+                    page_2_selectors = [
+                        'button[data-ev-page_index="2"]',
+                        'a[data-ev-page_index="2"]',
+                        'button[aria-label="Go to page 2"]',
+                        '.pagination button:nth-child(3)',
+                        'li[data-page="2"] button'
+                    ]
+                    
+                    page_2_found = False
+                    for selector in page_2_selectors:
+                        try:
+                            if sb.is_element_visible(selector):
+                                sb.scroll_to_element(selector)
+                                sb.sleep(2)
+                                sb.click(selector)
+                                print(f"[Auth Bot] ✅ Clicked page 2: {selector}")
+                                page_2_found = True
+                                break
+                        except Exception:
+                            continue
+
+                    if not page_2_found:
+                        print("[Auth Bot] ⚠️ Page 2 not found, trying JS click...")
+                        try:
+                            sb.execute_script("""
+                                const pageBtn = document.querySelector('[data-ev-page_index="2"]');
+                                if (pageBtn) pageBtn.click();
+                            """)
+                            print("[Auth Bot] ✅ Clicked page 2 via JS")
+                        except Exception as e:
+                            print(f"[Auth Bot] ❌ Could not click page 2: {e}")
+
+                    # Wait for GraphQL request
+                    print("[Auth Bot] Waiting for GraphQL request...")
+                    sb.sleep(5)  # Reduced wait time
+
+                    # Check captured requests
+                    print("[Auth Bot] Analyzing network requests...")
+                    try:
+                        captured_requests = sb.execute_script("return window.capturedRequests || [];")
+                        print(f"[Auth Bot] Captured {len(captured_requests)} requests")
+                        
+                        if captured_requests:
+                            latest_request = captured_requests[-1]
+                            headers_found = latest_request.get('headers', {})
+                            
+                            if not headers_found or len(headers_found) == 0:
+                                print("[Auth Bot] No headers captured, creating fallback...")
+                                try:
+                                    user_agent = sb.execute_script("return navigator.userAgent;")
+                                    current_url = sb.get_current_url()
+                                except Exception:
+                                    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                    current_url = "https://www.upwork.com"
+                                
+                                headers_found = {
+                                    'Accept': 'application/json, text/plain, */*',
+                                    'Accept-Language': 'en-US,en;q=0.9',
+                                    'Content-Type': 'application/json',
+                                    'User-Agent': user_agent,
+                                    'Referer': current_url,
+                                    'Origin': 'https://www.upwork.com'
+                                }
+                            
+                            print(f"[Auth Bot] ✅ Headers captured from {latest_request.get('type', 'unknown')}")
+                        else:
+                            print("[Auth Bot] No requests captured, using fallback headers...")
+                            try:
+                                user_agent = sb.execute_script("return navigator.userAgent;")
+                                current_url = sb.get_current_url()
+                            except Exception:
+                                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                current_url = "https://www.upwork.com"
+                            
+                            headers_found = {
+                                'Accept': 'application/json, text/plain, */*',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Content-Type': 'application/json',
+                                'User-Agent': user_agent,
+                                'Referer': current_url,
+                                'Origin': 'https://www.upwork.com'
+                            }
+                            
+                    except Exception as e:
+                        print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
+                        # Create fallback headers even if script execution fails
+                        headers_found = {
+                            'Accept': 'application/json, text/plain, */*',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Referer': 'https://www.upwork.com',
+                            'Origin': 'https://www.upwork.com'
+                        }
+
+                    # Capture cookies
+                    print("[Auth Bot] Capturing cookies...")
+                    try:
+                        cookies = {}
+                        for cookie in sb.get_cookies():
+                            cookies[cookie['name']] = cookie['value']
+                        print(f"[Auth Bot] ✅ Captured {len(cookies)} cookies")
+                        
+                        # IMPORTANT: Set cookies_found BEFORE saving
+                        cookies_found = cookies
+                        
+                        # Save cookies with consistent path
+                        script_dir = os.path.dirname(os.path.abspath(__file__)) if os.path.dirname(__file__) else os.getcwd()
+                        cookies_file = os.path.join(script_dir, "upwork_cookies.json")
+                        with open(cookies_file, "w") as f:
+                            json.dump(cookies, f, indent=2)
+                        print(f"[Auth Bot] ✅ Cookies saved to {cookies_file}")
+                        
+                    except Exception as e:
+                        print(f"[Auth Bot] ⚠️ Cookie error: {e}")
+                        cookies_found = None  # Explicitly set to None on error
+
+            # If we successfully captured headers and cookies, break out of browser loop
+            if headers_found is not None and cookies_found is not None:
+                print(f"[Auth Bot] ✅ Successfully captured credentials with {browser.title()}!")
+                break
+                
+        except Exception as e:
+            print(f"[Auth Bot] ❌ {browser.title()} failed: {e}")
+            # Reset variables in case of failure
+            headers_found = None
+            cookies_found = None
+            
+            if browser == browsers_to_try[-1]:  # If this is the last browser to try
+                print(f"[Auth Bot] ❌ All browsers failed")
+                import traceback
+                traceback.print_exc()
                 return False
-
-            # Capture cookies
-            print("[Auth Bot] Capturing cookies...")
-            try:
-                cookies = {}
-                for cookie in sb.get_cookies():
-                    cookies[cookie['name']] = cookie['value']
-                print(f"[Auth Bot] ✅ Captured {len(cookies)} cookies")
-                
-                # IMPORTANT: Set cookies_found BEFORE saving
-                cookies_found = cookies
-                
-                # Save cookies with consistent path
-                script_dir = os.path.dirname(os.path.abspath(__file__)) if os.path.dirname(__file__) else os.getcwd()
-                cookies_file = os.path.join(script_dir, "upwork_cookies.json")
-                with open(cookies_file, "w") as f:
-                    json.dump(cookies, f, indent=2)
-                print(f"[Auth Bot] ✅ Cookies saved to {cookies_file}")
-                
-            except Exception as e:
-                print(f"[Auth Bot] ⚠️ Cookie error: {e}")
-                cookies_found = None  # Explicitly set to None on error
-
-    except Exception as e:
-        print(f"[Auth Bot] ❌ Automation error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+            else:
+                print(f"[Auth Bot] Trying next browser...")
+                continue
 
     # Debug: Check what we captured
     print(f"\n[Auth Bot] 📊 Capture Summary:")
