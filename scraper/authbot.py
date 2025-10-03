@@ -259,26 +259,58 @@ def get_upwork_headers():
     try:
         print("[Auth Bot] Starting browser (Cloudflare bypass enabled)...")
 
-        # Decide browser based on environment
-        sb_kwargs = {
-            "uc": True,
+        # Build base kwargs and adjust for WSL to avoid uc_driver issues
+        base_kwargs = {
+            "uc": True,  # default for non-WSL
             "test": True,
             "locale": "en",
             "headless": True,
             "page_load_strategy": "eager",
         }
-        if _is_wsl_ubuntu():
-            # On Ubuntu WSL, SeleniumBase works more reliably with Chromium
-            sb_kwargs["browser"] = "chromium"
-            print("[Auth Bot] Detected Ubuntu WSL environment -> using Chromium")
-        else:
-            print("[Auth Bot] Non-WSL environment -> using default browser settings")
 
-        # Optimized browser settings for speed
-        with SB(**sb_kwargs) as sb:
-            
+        if _is_wsl_ubuntu():
+            # On Ubuntu WSL, avoid undetected-chromedriver (uc) due to Exec format errors.
+            # Prefer Chromium with standard driver; if that fails, we'll fall back to Firefox.
+            base_kwargs["uc"] = False
+            base_kwargs["browser"] = "chromium"
+            print("[Auth Bot] Detected Ubuntu WSL -> using Chromium (uc disabled)")
+        else:
+            print("[Auth Bot] Non-WSL environment -> using default Chrome (uc enabled)")
+
+        # Allow environment overrides for easier ops in WSL
+        env_browser = os.environ.get("AUTHBOT_BROWSER", "").strip().lower()
+        env_disable_uc = os.environ.get("AUTHBOT_DISABLE_UC", "").strip()
+        if env_browser in ("chrome", "chromium", "firefox"):
+            base_kwargs["browser"] = env_browser
+            print(f"[Auth Bot] Browser override via AUTHBOT_BROWSER={env_browser}")
+            # If forcing a non-Chrome browser, disable uc for safety
+            if env_browser in ("firefox", "chromium"):
+                base_kwargs["uc"] = False
+        if env_disable_uc in ("1", "true", "yes", "on"):
+            base_kwargs["uc"] = False
+            print("[Auth Bot] UC disabled via AUTHBOT_DISABLE_UC=1")
+
+        def _run_scrape_flow(sb):
+            """Encapsulate the scraping/capture logic so we can reuse across fallbacks."""
             url = "https://www.upwork.com/nx/search/jobs/?q=python"
-            sb.activate_cdp_mode(url)
+
+            # Only use CDP mode on Chromium-based browsers
+            try:
+                use_cdp = True
+                try:
+                    # If running on Firefox, CDP isn't supported
+                    # Firefox is used explicitly when browser kwarg is 'firefox'
+                    use_cdp = (getattr(sb, "browser", None) or "").lower() not in ("firefox",)
+                except Exception:
+                    pass
+
+                if use_cdp:
+                    sb.activate_cdp_mode(url)
+                else:
+                    sb.open(url)
+            except Exception:
+                # As a safe fallback, just open the page
+                sb.open(url)
             
             print("[Auth Bot] Waiting for Cloudflare bypass...")
             
@@ -469,6 +501,26 @@ def get_upwork_headers():
             except Exception as e:
                 print(f"[Auth Bot] ⚠️ Cookie error: {e}")
                 cookies_found = None  # Explicitly set to None on error
+
+        # Try primary attempt
+        try:
+            with SB(**base_kwargs) as sb:
+                _run_scrape_flow(sb)
+        except OSError as e:
+            # Handle driver Exec format error by falling back to Firefox on WSL
+            if "Exec format error" in str(e):
+                print("[Auth Bot] ⚠️ Driver Exec format error detected. Attempting Firefox fallback...")
+                try:
+                    ff_kwargs = dict(base_kwargs)
+                    ff_kwargs["uc"] = False
+                    ff_kwargs["browser"] = "firefox"
+                    with SB(**ff_kwargs) as sb:
+                        _run_scrape_flow(sb)
+                except Exception as e2:
+                    print(f"[Auth Bot] ❌ Firefox fallback failed: {e2}")
+                    raise
+            else:
+                raise
 
     except Exception as e:
         print(f"[Auth Bot] ❌ Automation error: {e}")
