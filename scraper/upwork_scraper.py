@@ -609,9 +609,9 @@ class UpworkScraper:
             
         return headers
 
-    def fetch_jobs(self, query="", limit=10, delay=True):
+    def fetch_jobs(self, query="", limit=10, delay=True, filters=None):
         from .job_search import fetch_jobs
-        return fetch_jobs(self, query, limit, delay)
+        return fetch_jobs(self, query, limit, delay, filters)
 
     def debug_job_ids(self, jobs_data):
         from .job_search import debug_job_ids

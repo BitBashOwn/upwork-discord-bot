@@ -4,81 +4,146 @@ ADVANCED_JOB_SEARCHES = [
         "category": "Android Automation",
         "keyword": "Mobile Farm",
         "query": "Mobile farm",
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Android Automation", 
         "keyword": "Appium",
         "query": "Appium",
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Android Automation",
         "keyword": "iPhone Automation", 
         "query": "Iphone Automation",
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Android Automation",
         "keyword": "Mobile Bot",
         "query": "title:(Mobile bot)",
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Android Automation",
         "keyword": "Phone Farm",
         "query": "phone AND farm", 
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Android Automation",
         "keyword": "Android Device Automation",
         "query": "title:(android device automation)",
-        "channel_id": 1420931314328277012
+        "channel_id": 1420931314328277012,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     # Stealth Automation Keywords
     {
         "category": "Stealth Automation",
         "keyword": "Multilogin",
         "query": 'title:(Multilogin) OR description:(Multilogin)',  # Search in title or description
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Stealth Automation", 
         "keyword": "GoLogin",
         "query": 'title:(GoLogin) OR description:(GoLogin)',
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Stealth Automation",
         "keyword": "Incognition",
         "query": 'title:(Incognition) OR description:(Incognition)', 
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Stealth Automation",
         "keyword": "AdsPower",
         "query": 'title:(AdsPower) OR description:(AdsPower)',
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     # Concept-based searches - keep these but they'll be filtered
     {
         "category": "Stealth Automation",
         "keyword": "Browser Fingerprint",
         "query": 'title:("browser fingerprint") OR description:("browser fingerprint")',
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Stealth Automation",
         "keyword": "Antidetect Browser",
         "query": 'title:(antidetect) OR description:(antidetect browser)',
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Stealth Automation", 
         "keyword": "Social Media Automation",
         "query": 'title:("social media automation")',
-        "channel_id": 1420931377972641873
+        "channel_id": 1420931377972641873,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     
     # AI Automation Keywords  
@@ -86,25 +151,45 @@ ADVANCED_JOB_SEARCHES = [
         "category": "AI Automation",
         "keyword": "n8n",
         "query": "n8n",
-        "channel_id": 1420931417503961170
+        "channel_id": 1420931417503961170,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "AI Automation",
         "keyword": "Make.com", 
         "query": "make.com",
-        "channel_id": 1420931417503961170
+        "channel_id": 1420931417503961170,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "AI Automation",
         "keyword": "Zapier",
         "query": "zapier",
-        "channel_id": 1420931417503961170
+        "channel_id": 1420931417503961170,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "AI Automation",
         "keyword": "Pipedream",
         "query": "pipedream", 
-        "channel_id": 1420931417503961170
+        "channel_id": 1420931417503961170,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     # Web Development Keywords
     {
@@ -123,31 +208,56 @@ ADVANCED_JOB_SEARCHES = [
         "category": "TikTok Shop", 
         "keyword": "TikTok Shop Manager",
         "query": "(TikTok AND Shop AND Manager)",
-        "channel_id": 1420931498147577929
+        "channel_id": 1420931498147577929,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     # General Automation Keywords
     {
         "category": "Automation",
         "keyword": "Bot Development",
         "query": "bot",
-        "channel_id": 1420931531571990609
+        "channel_id": 1420931531571990609,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Automation",
         "keyword": "Browser Automation Tools", 
         "query": "(selenium OR puppeteer OR playwright)",
-        "channel_id": 1420931531571990609
+        "channel_id": 1420931531571990609,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Automation",
         "keyword": "Browser Automation",
         "query": "browser automation",
-        "channel_id": 1420931531571990609
+        "channel_id": 1420931531571990609,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     },
     {
         "category": "Automation",
         "keyword": "Android Accessibility Service",
         "query": "Android Accessibility Service", 
-        "channel_id": 1420931531571990609
+        "channel_id": 1420931531571990609,
+        "filters": {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        }
     }
 ]

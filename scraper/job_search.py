@@ -7,6 +7,18 @@ async def fetch_jobs(scraper, query, limit=100, delay=True, filters=None):
     from .graphql_payloads import VISITOR_JOB_SEARCH_QUERY, MINIMAL_VISITOR_JOB_SEARCH_QUERY
     
     print(f"Trying visitorJobSearch with query: '{query}'")
+    
+    # Apply default filters if none provided
+    if not filters:
+        filters = {}
+    
+    # Ensure payment verification is always required
+    filters["payment_verified"] = True
+    
+    # Ensure experience level is intermediate or expert
+    if "contractor_tier" not in filters:
+        filters["contractor_tier"] = ["2", "3"]  # Intermediate and Expert
+    
     if filters:
         print(f"  Filters applied: {filters}")
     
@@ -24,22 +36,24 @@ async def fetch_jobs(scraper, query, limit=100, delay=True, filters=None):
     
     # ADD FILTERS IF PROVIDED
     if filters:
+        # Note: contractor_tier filtering is done in post-processing only
+        # The visitor API doesn't support reliable contractor tier filtering
         if "contractor_tier" in filters and filters["contractor_tier"]:
-            request_vars["contractorTier"] = filters["contractor_tier"]
-            print(f"  - Contractor Tier: {filters['contractor_tier']}")
+            print(f"  - Contractor Tier: Will be filtered in post-processing")
         
+        # Note: clientPaymentVerificationStatus is not supported by visitor API
+        # Payment verification will be filtered in post-processing
         if "payment_verified" in filters and filters["payment_verified"]:
-            request_vars["clientPaymentVerificationStatus"] = True
-            print(f"  - Payment Verified: Required")
+            print(f"  - Payment Verified: Will be filtered in post-processing")
         
         if "job_type" in filters and filters["job_type"]:
-            # Map job types to Upwork's format
+            # Map job types to Upwork's correct enum format
             job_type_map = {
-                "hourly": "HOURLY",
-                "fixed": "FIXED_PRICE"
+                "hourly": "hourly",
+                "fixed": "fixed"
             }
             request_vars["jobType"] = [
-                job_type_map.get(jt.lower(), jt.upper()) 
+                job_type_map.get(jt.lower(), jt.lower()) 
                 for jt in filters["job_type"]
             ]
             print(f"  - Job Types: {request_vars['jobType']}")
@@ -58,7 +72,9 @@ async def fetch_jobs(scraper, query, limit=100, delay=True, filters=None):
     
     if jobs_data:
         debug_job_ids(jobs_data)
-        return jobs_data
+        # Apply filtering criteria
+        filtered_jobs = filter_jobs_by_criteria(jobs_data, filters)
+        return filtered_jobs
     
     print("First attempt failed, trying minimal search...")
     return await try_minimal_search(scraper, query, limit, delay, filters)
@@ -66,6 +82,62 @@ async def fetch_jobs(scraper, query, limit=100, delay=True, filters=None):
 def debug_job_ids(jobs_data):
     # This function is already imported and used as a helper, so just return as is
     return jobs_data
+
+def filter_jobs_by_criteria(jobs_data, filters=None):
+    """
+    Filter jobs based on specific criteria:
+    - Payment verification required (checked if available in job data)
+    - Experience level: intermediate (2) or expert (3) only
+    - Exclude jobs with certain keywords in title, description, or skills
+    """
+    if not jobs_data:
+        return jobs_data
+    
+    # Keywords to exclude (case-insensitive)
+    excluded_keywords = ['n8n', 'hubspot']
+    
+    filtered_jobs = []
+    excluded_count = 0
+    
+    for job in jobs_data:
+        # Check payment verification if available in job data
+        # Note: Visitor API may not provide this information
+        if filters and filters.get("payment_verified"):
+            payment_verified = job.get('client', {}).get('paymentVerified') if isinstance(job.get('client'), dict) else None
+            if payment_verified is False:
+                excluded_count += 1
+                print(f"Excluded job '{job.get('title', 'Unknown')}' - Client payment not verified")
+                continue
+            # If payment_verified is None, we can't determine status, so we allow it through
+        
+        # Check experience level filter (must be intermediate or expert)
+        experience_level = job.get('experience_level', '').lower()
+        if experience_level not in ['2', '3', 'intermediate', 'expert', 'intermediatelevel', 'expertlevel']:
+            excluded_count += 1
+            print(f"Excluded job '{job.get('title', 'Unknown')}' - Experience level: {experience_level}")
+            continue
+        
+        # Check for excluded keywords in title, description, and skills
+        title = job.get('title', '').lower()
+        description = job.get('description', '').lower()
+        skills = [skill.lower() for skill in job.get('skills', [])]
+        
+        # Check if any excluded keyword appears in title, description, or skills
+        should_exclude = False
+        for keyword in excluded_keywords:
+            if (keyword in title or 
+                keyword in description or 
+                any(keyword in skill for skill in skills)):
+                excluded_count += 1
+                print(f"Excluded job '{job.get('title', 'Unknown')}' - Contains keyword: {keyword}")
+                should_exclude = True
+                break
+        
+        if not should_exclude:
+            filtered_jobs.append(job)
+    
+    print(f"Filtered jobs: {len(filtered_jobs)} kept, {excluded_count} excluded")
+    return filtered_jobs
 
 import json
 async def make_graphql_request(scraper, payload, method_name):
@@ -149,6 +221,17 @@ async def try_minimal_search(scraper, query, limit, delay, filters=None):
     """
     from .graphql_payloads import MINIMAL_VISITOR_JOB_SEARCH_QUERY
     
+    # Apply default filters if none provided
+    if not filters:
+        filters = {}
+    
+    # Ensure payment verification is always required
+    filters["payment_verified"] = True
+    
+    # Ensure experience level is intermediate or expert
+    if "contractor_tier" not in filters:
+        filters["contractor_tier"] = ["2", "3"]  # Intermediate and Expert
+    
     # Build request variables with filters
     request_vars = {
         "sort": "recency",
@@ -161,16 +244,20 @@ async def try_minimal_search(scraper, query, limit, delay, filters=None):
     
     # Add filters if provided
     if filters:
+        # Note: contractor_tier filtering is done in post-processing only
+        # The visitor API doesn't support reliable contractor tier filtering
         if "contractor_tier" in filters and filters["contractor_tier"]:
-            request_vars["contractorTier"] = filters["contractor_tier"]
+            print(f"  - Contractor Tier: Will be filtered in post-processing")
         
+        # Note: clientPaymentVerificationStatus is not supported by visitor API
+        # Payment verification will be filtered in post-processing
         if "payment_verified" in filters and filters["payment_verified"]:
-            request_vars["clientPaymentVerificationStatus"] = True
+            print(f"  - Payment Verified: Will be filtered in post-processing")
         
         if "job_type" in filters and filters["job_type"]:
-            job_type_map = {"hourly": "HOURLY", "fixed": "FIXED_PRICE"}
+            job_type_map = {"hourly": "hourly", "fixed": "fixed"}
             request_vars["jobType"] = [
-                job_type_map.get(jt.lower(), jt.upper()) 
+                job_type_map.get(jt.lower(), jt.lower()) 
                 for jt in filters["job_type"]
             ]
     
@@ -186,6 +273,12 @@ async def try_minimal_search(scraper, query, limit, delay, filters=None):
     
     print(f"Testing minimal visitor search...")
     jobs_data = await make_graphql_request(scraper, graphql_payload_minimal, "MinimalSearch")
+    
+    if jobs_data:
+        # Apply filtering criteria
+        filtered_jobs = filter_jobs_by_criteria(jobs_data, filters)
+        return filtered_jobs
+    
     return jobs_data
 
 def extract_jobs_from_response(data, method_name):

@@ -44,7 +44,7 @@ def test_job_details_fetch(headers, cookies):
     try:
         import cloudscraper
         session = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+            browser={"browser": "firefox", "platform": "windows", "mobile": False}
         )
         print("[Test] Using cloudscraper session")
     except ImportError:

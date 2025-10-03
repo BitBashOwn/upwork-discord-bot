@@ -20,7 +20,7 @@ async def fetch_and_build_job_message(job, search_context=""):
     
     # Build basic job message with REAL-TIME indicator
     job_msg = (
-        f"** JOB ALERT** \n"
+        f"🚨** JOB ALERT** \n"
         f"**{job['title']}** \n"
         f"{job['description'][:350] + '...' if len(job['description']) > 350 else job['description']}\n"
         f"\n"
@@ -109,8 +109,15 @@ async def process_single_search(search):
         
         print(f"[Real-time] Checking for new jobs: {search['keyword']} in category: {search['category']}")
         
-        # Fetch jobs for this specific keyword
-        jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True)
+        # Get filters from search configuration, use defaults if not provided
+        filters = search.get("filters", {
+            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            "payment_verified": True,
+            "job_type": ["hourly", "fixed"]
+        })
+        
+        # Fetch jobs for this specific keyword with filters
+        jobs = await scraper.fetch_jobs(query=search["query"], limit=10, delay=True, filters=filters)
         
         if not jobs:
             return
