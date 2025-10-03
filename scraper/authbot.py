@@ -27,6 +27,7 @@ import os
 import sys
 import platform
 import shutil
+import subprocess
 
 # Patch asyncio to allow nested event loops (fixes RuntimeError in Jupyter/IPython/Python 3.10+)
 try:
@@ -85,6 +86,13 @@ def should_use_firefox() -> bool:
     if os.environ.get("FORCE_FIREFOX", "").strip().lower() in ("1", "true", "yes", "y"):  # manual override
         return True
     return platform.system().lower() == "linux"  # prefer Firefox on all Linux
+
+def should_use_cdp() -> bool:
+    """Decide whether to use SeleniumBase pure CDP mode.
+    Enabled when env FORCE_CDP is set to any truthy value.
+    Note: Requires Chrome/Chromium installed on the system.
+    """
+    return os.environ.get("FORCE_CDP", "").strip().lower() in ("1", "true", "yes", "y")
 def test_job_details_fetch(headers, cookies):
     """Test fetching job details with captured credentials"""
     print("\n" + "=" * 70)
@@ -271,11 +279,158 @@ def get_upwork_headers():
         print(f"[Auth Bot] Platform: system={sys_name} release={rel} version={ver}")
         print(f"[Auth Bot] Detected WSL: {is_wsl} | Env[WSL_DISTRO_NAME]={'WSL_DISTRO_NAME' in os.environ}")
 
-        # Prefer Firefox on Linux/WSL or if forced by env
-        use_firefox = should_use_firefox()
-        print(f"[Auth Bot] Browser Strategy: {'Firefox (Linux/Forced)' if use_firefox else 'Chrome UC (Non-Linux)'}")
+        # Strategy selection
+        use_cdp = should_use_cdp()
+        use_firefox = should_use_firefox() and not use_cdp
+        strategy = (
+            "CDP (Chromium)" if use_cdp else
+            ("Firefox (Linux/Forced)" if use_firefox else "Chrome UC (Non-Linux)")
+        )
+        print(f"[Auth Bot] Browser Strategy: {strategy}")
 
-        if use_firefox:
+        # CDP mode (Chromium/Chrome) -- optional fast path
+        if use_cdp:
+            # Locate Chromium/Chrome
+            chrome_bins = [
+                shutil.which("google-chrome"),
+                shutil.which("chromium-browser"),
+                shutil.which("chromium"),
+                "/usr/bin/google-chrome",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+            ]
+            chrome_bins = [p for p in chrome_bins if p and os.path.exists(p)]
+            if not chrome_bins:
+                print("[Auth Bot] ❌ Chrome/Chromium not found for CDP mode.")
+                print("[Auth Bot] 💡 Install Chromium on Ubuntu:")
+                print("       sudo apt update && sudo apt install -y chromium-browser")
+                print("     If apt uses Snap, consider installing google-chrome-stable via .deb from Google.")
+                return False
+
+            chrome_path = chrome_bins[0]
+            print(f"[Auth Bot] Using Chromium for CDP: {chrome_path}")
+
+            try:
+                with SB(cdp=True, headless=True, locale="en", page_load_strategy="eager") as sb:
+                    url = "https://www.upwork.com/nx/search/jobs/?q=python"
+                    sb.activate_cdp_mode(url)
+
+                    print("[Auth Bot] Waiting for page in CDP mode...")
+                    for _ in range(8):
+                        sb.sleep(2)
+                        try:
+                            src = sb.get_page_source()
+                            if src and ("Just a moment" not in src and "Checking your browser" not in src):
+                                break
+                        except Exception:
+                            # Some CDP builds may not support get_page_source; keep going
+                            pass
+
+                    # Try JS network monitor (best effort; may not be supported in strict CDP-only)
+                    headers_found = None
+                    try:
+                        monitor_script = """
+                        window.capturedRequests = [];
+                        const originalFetch = window.fetch;
+                        window.fetch = function(...args) {
+                            const url = args[0];
+                            const options = args[1] || {};
+                            if (typeof url === 'string' && url.includes('visitorJobSearch')) {
+                                window.capturedRequests.push({
+                                    url: url,
+                                    headers: options.headers || {},
+                                    method: options.method || 'GET',
+                                    type: 'fetch'
+                                });
+                            }
+                            return originalFetch.apply(this, args);
+                        };
+                        const originalXHROpen = XMLHttpRequest.prototype.open;
+                        const originalXHRSend = XMLHttpRequest.prototype.send;
+                        const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                        XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
+                            this._method = method;
+                            this._url = url;
+                            this._headers = {};
+                            return originalXHROpen.apply(this, arguments);
+                        };
+                        XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+                            this._headers[header] = value;
+                            return originalSetHeader.call(this, header, value);
+                        };
+                        XMLHttpRequest.prototype.send = function(data) {
+                            if (this._url && this._url.includes('visitorJobSearch')) {
+                                window.capturedRequests.push({
+                                    url: this._url,
+                                    method: this._method,
+                                    headers: this._headers || {},
+                                    data: data,
+                                    type: 'xhr'
+                                });
+                            }
+                            return originalXHRSend.apply(this, arguments);
+                        };
+                        """
+                        try:
+                            sb.execute_script(monitor_script)
+                        except Exception:
+                            pass
+
+                        sb.sleep(5)
+                        try:
+                            captured_requests = sb.execute_script("return window.capturedRequests || [];")
+                            if captured_requests:
+                                latest_request = captured_requests[-1]
+                                headers_found = latest_request.get('headers', {}) or None
+                        except Exception:
+                            headers_found = None
+
+                    except Exception:
+                        headers_found = None
+
+                    # Cookies and UA fallbacks
+                    cookies = {}
+                    try:
+                        for cookie in sb.get_cookies():
+                            cookies[cookie['name']] = cookie['value']
+                    except Exception:
+                        pass
+
+                    try:
+                        user_agent = None
+                        try:
+                            user_agent = sb.execute_script("return navigator.userAgent;")
+                        except Exception:
+                            pass
+                        if not user_agent:
+                            user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+
+                        if not headers_found:
+                            referer = None
+                            try:
+                                referer = sb.get_current_url()
+                            except Exception:
+                                referer = "https://www.upwork.com/nx/search/jobs/"
+                            headers_found = {
+                                'Accept': 'application/json, text/plain, */*',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Content-Type': 'application/json',
+                                'User-Agent': user_agent,
+                                'Referer': referer,
+                                'Origin': 'https://www.upwork.com'
+                            }
+
+                        # Save cookies immediately for consistency
+                        cookies_found = cookies if cookies else None
+                    except Exception:
+                        cookies_found = None
+
+            except Exception as e:
+                print(f"[Auth Bot] ❌ CDP mode failed: {e}")
+                return False
+
+            # Continue to saving and testing section below
+        elif use_firefox:
             # Verify Firefox availability before starting
             ff_path = shutil.which("firefox") or "/usr/bin/firefox"
             if not os.path.exists(ff_path):
@@ -287,8 +442,41 @@ def get_upwork_headers():
                 print("     Or install firefox-esr via PPA if needed.")
                 return False
 
+            # Resolve real path (detect snap wrapper)
+            ff_real = os.path.realpath(ff_path)
+            is_root = False
+            try:
+                is_root = os.geteuid() == 0  # type: ignore[attr-defined]
+            except Exception:
+                is_root = False
+
+            if "/snap/" in ff_real and is_root:
+                print("[Auth Bot] ❌ Snap Firefox cannot run as root. Current user is root.")
+                print("[Auth Bot] 👉 Solutions:")
+                print("   - Run the bot as a non-root user, OR")
+                print("   - Install a non-snap Firefox build (Mozilla Team PPA) and remove the snap:")
+                print("       sudo snap remove firefox")
+                print("       sudo add-apt-repository -y ppa:mozillateam/ppa")
+                print("       sudo apt update && sudo apt install -y firefox")
+                print("   - Alternatively install geckodriver + firefox-esr from Debian repos if using Debian.")
+                return False
+
+            # Quick execution check
+            try:
+                ver_out = subprocess.run([ff_path, "--version"], capture_output=True, text=True, timeout=10)
+                if ver_out.returncode != 0:
+                    print(f"[Auth Bot] ❌ Firefox failed to run: {ver_out.stderr.strip() or 'Unknown error'}")
+                    return False
+                print(f"[Auth Bot] Firefox detected: {ver_out.stdout.strip() or ff_real}")
+            except Exception as e:
+                print(f"[Auth Bot] ❌ Unable to execute Firefox: {e}")
+                return False
+
+            # Ensure headless mode via env for stability
+            os.environ.setdefault("MOZ_HEADLESS", "1")
+
             print("[Auth Bot] Environment: Linux/WSL -> Using Firefox headless")
-            with SB(browser="firefox", test=True, locale="en", headless=True,
+            with SB(browser="firefox", test=True, locale="en", headless=True, xvfb=True,
                     page_load_strategy="eager") as sb:
                 url = "https://www.upwork.com/nx/search/jobs/?q=python"
                 sb.open(url)

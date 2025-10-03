@@ -1,10 +1,10 @@
 {
   "X-Upwork-Accept-Language": "en-US",
-  "vnd-eo-visitorId": "39.45.37.249.1759490864690000",
+  "vnd-eo-visitorId": "39.45.37.249.1759493227318000",
   "Accept-Encoding": "gzip",
   "Content-Type": "application/json",
-  "vnd-eo-trace-id": "988c178f6147e8c7-SEA",
-  "vnd-eo-span-id": "f33cc083-6648-410a-baa9-1e0874c9bb8a",
-  "vnd-eo-parent-span-id": "1859d7fa-f3f5-4f21-b1c5-d85f7588fc7e",
-  "Authorization": "Bearer oauth2v2_9eedde7f9daecacad837bb9cfe3daa22"
+  "vnd-eo-trace-id": "988c513db39f2490-SEA",
+  "vnd-eo-span-id": "ed8ca5bb-6a89-4423-bb9c-b741df63af9a",
+  "vnd-eo-parent-span-id": "3a9f96e2-6f27-48a5-97b0-3ba29f5e5e96",
+  "Authorization": "Bearer oauth2v2_d3cf7ce7f954d91fab87b6a101118846"
 }
