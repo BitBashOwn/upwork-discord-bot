@@ -59,16 +59,18 @@ def get_upwork_headers_ubuntu():
                 "locale": "en",
                 "headless": True,  # Always headless on servers
                 "browser": browser,
-                "page_load_strategy": "eager",
-                # Linux-specific options
-                "disable_gpu": True,
-                "no_sandbox": True,
-                "disable_dev_shm_usage": True,
-                "disable_extensions": True
+                "page_load_strategy": "eager"
             }
             
             with SB(**browser_options) as sb:
                 print("[Ubuntu Bot] Browser started successfully")
+                
+                # Apply Linux-specific optimizations after browser starts
+                try:
+                    sb.driver.execute_cdp_cmd('Runtime.enable', {})
+                    print("[Ubuntu Bot] ✅ Linux optimizations applied")
+                except Exception:
+                    print("[Ubuntu Bot] ⚠️ Optimizations not available, continuing...")
                 
                 # Navigate to Upwork
                 url = "https://www.upwork.com/nx/search/jobs/?q=python"

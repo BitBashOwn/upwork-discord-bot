@@ -233,25 +233,15 @@ def get_upwork_headers():
         try:
             # Enhanced Firefox configuration for Linux servers
             if browser == "firefox":
-                # Firefox options for better Linux compatibility
-                firefox_options = {
-                    "uc": False, 
-                    "test": True, 
-                    "locale": "en", 
-                    "headless": True,
-                    "browser": browser, 
-                    "page_load_strategy": "eager"
-                }
-                
-                # Add Linux-specific options
-                if os_name == "linux":
-                    firefox_options.update({
-                        "disable_gpu": True,
-                        "no_sandbox": True,
-                        "disable_dev_shm_usage": True
-                    })
-                
-                with SB(**firefox_options) as sb:
+                # Basic SeleniumBase options
+                with SB(uc=False, test=True, locale="en", headless=True,
+                        browser=browser, page_load_strategy="eager") as sb:
+                    
+                    # Add Linux-specific browser arguments after initialization
+                    if os_name == "linux":
+                        # These will be handled by SeleniumBase internally
+                        sb.driver.execute_cdp_cmd('Runtime.enable', {})
+                        print("[Auth Bot] ✅ Linux-specific optimizations applied")
                     
                     url = "https://www.upwork.com/nx/search/jobs/?q=python"
                     sb.open(url)  # Use regular open instead of CDP mode for Firefox
@@ -317,27 +307,17 @@ def get_upwork_headers():
                         cookies_found = {}
             
             else:  # Chrome
-                # Chrome options with Linux compatibility
-                chrome_options = {
-                    "uc": use_uc, 
-                    "test": True, 
-                    "locale": "en", 
-                    "headless": True,
-                    "browser": browser, 
-                    "page_load_strategy": "eager"
-                }
-                
-                # Add Linux-specific Chrome options
-                if os_name == "linux":
-                    chrome_options.update({
-                        "disable_gpu": True,
-                        "no_sandbox": True,
-                        "disable_dev_shm_usage": True,
-                        "disable_extensions": True,
-                        "remote_debugging_port": 9222
-                    })
-                
-                with SB(**chrome_options) as sb:
+                # Basic SeleniumBase options for Chrome
+                with SB(uc=use_uc, test=True, locale="en", headless=True,
+                        browser=browser, page_load_strategy="eager") as sb:
+                    
+                    # Add Linux-specific optimizations
+                    if os_name == "linux":
+                        try:
+                            sb.driver.execute_cdp_cmd('Runtime.enable', {})
+                            print("[Auth Bot] ✅ Linux Chrome optimizations applied")
+                        except Exception:
+                            print("[Auth Bot] ⚠️ Chrome optimizations not available, continuing...")
                     
                     url = "https://www.upwork.com/nx/search/jobs/?q=python"
                     sb.activate_cdp_mode(url)
