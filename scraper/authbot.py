@@ -20,13 +20,11 @@ if sys.version_info >= (3, 11):
     asyncio.get_event_loop = _get_running_loop
 # -----------------------------------------------------------
 
-import requests
 import json
 import time
 from seleniumbase import SB
 import os
 import sys
-import traceback
 
 # Patch asyncio to allow nested event loops (fixes RuntimeError in Jupyter/IPython/Python 3.10+)
 try:
@@ -34,58 +32,6 @@ try:
     nest_asyncio.apply()
 except ImportError:
     pass  # If not available, ignore, but recommend installing it if error persists
-
-# Add parent directory to path to import config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import UPWORK_EMAIL, UPWORK_PASSWORD
-
-# -----------------------------------------------------------
-# Environment detection utilities
-def _is_wsl_ubuntu() -> bool:
-    """Return True if running on Ubuntu under WSL.
-
-    Detection strategy:
-    - OS must be Linux
-    - One of the WSL indicators is present (env or /proc/version)
-    - Distro is Ubuntu (via env or /etc/os-release)
-    """
-    try:
-        if sys.platform != "linux":
-            return False
-
-        # Check WSL indicators
-        env = os.environ
-        wsl_env = any(k in env for k in ("WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"))
-        wsl_version = False
-        try:
-            with open("/proc/version", "r", encoding="utf-8", errors="ignore") as f:
-                ver = f.read().lower()
-                wsl_version = ("microsoft" in ver) or ("wsl" in ver)
-        except Exception:
-            pass
-
-        is_wsl = wsl_env or wsl_version
-        if not is_wsl:
-            return False
-
-        # Check that distro is Ubuntu
-        is_ubuntu = False
-        if env.get("WSL_DISTRO_NAME", "").lower().startswith("ubuntu"):
-            is_ubuntu = True
-        else:
-            try:
-                with open("/etc/os-release", "r", encoding="utf-8", errors="ignore") as f:
-                    data = f.read().lower()
-                    is_ubuntu = ("ubuntu" in data)
-            except Exception:
-                # If we can't read the file, assume not Ubuntu
-                is_ubuntu = False
-
-        return is_ubuntu
-    except Exception:
-        return False
-
-
 def test_job_details_fetch(headers, cookies):
     """Test fetching job details with captured credentials"""
     print("\n" + "=" * 70)
@@ -258,7 +204,6 @@ def test_job_details_fetch(headers, cookies):
         print(f"[Test] ❌ Request failed: {e}")
         return False
 
-
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed"""
     headers_found = None
@@ -266,59 +211,13 @@ def get_upwork_headers():
     
     try:
         print("[Auth Bot] Starting browser (Cloudflare bypass enabled)...")
-
-        # Build base kwargs and adjust for WSL to avoid uc_driver issues
-        base_kwargs = {
-            "uc": True,  # default for non-WSL
-            "test": True,
-            "locale": "en",
-            "headless": True,
-            "page_load_strategy": "eager",
-        }
-
-        if _is_wsl_ubuntu():
-            # On Ubuntu WSL, avoid undetected-chromedriver (uc) due to Exec format errors.
-            # Prefer Chromium with standard driver; if that fails, we'll fall back to Firefox.
-            base_kwargs["uc"] = False
-            base_kwargs["browser"] = "chromium"
-            print("[Auth Bot] Detected Ubuntu WSL -> using Chromium (uc disabled)")
-        else:
-            print("[Auth Bot] Non-WSL environment -> using default Chrome (uc enabled)")
-
-        # Allow environment overrides for easier ops in WSL
-        env_browser = os.environ.get("AUTHBOT_BROWSER", "").strip().lower()
-        env_disable_uc = os.environ.get("AUTHBOT_DISABLE_UC", "").strip()
-        if env_browser in ("chrome", "chromium", "firefox"):
-            base_kwargs["browser"] = env_browser
-            print(f"[Auth Bot] Browser override via AUTHBOT_BROWSER={env_browser}")
-            # If forcing a non-Chrome browser, disable uc for safety
-            if env_browser in ("firefox", "chromium"):
-                base_kwargs["uc"] = False
-        if env_disable_uc in ("1", "true", "yes", "on"):
-            base_kwargs["uc"] = False
-            print("[Auth Bot] UC disabled via AUTHBOT_DISABLE_UC=1")
-
-        def _run_scrape_flow(sb):
-            """Encapsulate the scraping/capture logic so we can reuse across fallbacks."""
+        
+        # Optimized browser settings for speed
+        with SB(uc=True, test=True, locale="en", headless=True, 
+                page_load_strategy="eager") as sb:
+            
             url = "https://www.upwork.com/nx/search/jobs/?q=python"
-
-            # Only use CDP mode on Chromium-based browsers
-            try:
-                use_cdp = True
-                try:
-                    # If running on Firefox, CDP isn't supported
-                    # Firefox is used explicitly when browser kwarg is 'firefox'
-                    use_cdp = (getattr(sb, "browser", None) or "").lower() not in ("firefox",)
-                except Exception:
-                    pass
-
-                if use_cdp:
-                    sb.activate_cdp_mode(url)
-                else:
-                    sb.open(url)
-            except Exception:
-                # As a safe fallback, just open the page
-                sb.open(url)
+            sb.activate_cdp_mode(url)
             
             print("[Auth Bot] Waiting for Cloudflare bypass...")
             
@@ -510,26 +409,6 @@ def get_upwork_headers():
                 print(f"[Auth Bot] ⚠️ Cookie error: {e}")
                 cookies_found = None  # Explicitly set to None on error
 
-        # Try primary attempt
-        try:
-            with SB(**base_kwargs) as sb:
-                _run_scrape_flow(sb)
-        except OSError as e:
-            # Handle driver Exec format error by falling back to Firefox on WSL
-            if "Exec format error" in str(e):
-                print("[Auth Bot] ⚠️ Driver Exec format error detected. Attempting Firefox fallback...")
-                try:
-                    ff_kwargs = dict(base_kwargs)
-                    ff_kwargs["uc"] = False
-                    ff_kwargs["browser"] = "firefox"
-                    with SB(**ff_kwargs) as sb:
-                        _run_scrape_flow(sb)
-                except Exception as e2:
-                    print(f"[Auth Bot] ❌ Firefox fallback failed: {e2}")
-                    raise
-            else:
-                raise
-
     except Exception as e:
         print(f"[Auth Bot] ❌ Automation error: {e}")
         import traceback
@@ -614,7 +493,6 @@ def get_upwork_headers():
         print("[Auth Bot] ❌ No headers found")
         return False
 
-
 def verify_headers():
     """Verify that saved headers are valid"""
     try:
@@ -654,13 +532,11 @@ def verify_headers():
         else:
             print("[Auth Bot] ❌ Headers file not found")
             return False
-            
     except Exception as e:
         print(f"[Auth Bot] ❌ Verification error: {e}")
         import traceback
         traceback.print_exc()
         return False
-
 
 def main():
     """Main function for standalone execution"""
@@ -700,7 +576,6 @@ def main():
         sys.exit(1)
     
     print("=" * 70)
-
 
 if __name__ == "__main__":
     main()
