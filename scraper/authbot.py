@@ -120,95 +120,137 @@ def test_job_details_fetch(headers, cookies):
     print(f"[Test] Testing with job ID: {test_job_id}")
     print(f"[Test] Request URL: {url}")
     
-    try:
-        response = session.post(
-            url,
-            headers=headers,
-            cookies=cookies,
-            json=payload,
-            timeout=15
-        )
-        
-        print(f"[Test] Response Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                
-                # Check for errors
-                if "errors" in data:
-                    print("[Test] ❌ GraphQL Errors Found:")
-                    for error in data["errors"]:
-                        print(f"  - {error.get('message', 'Unknown error')}")
-                    return False
-                
-                # Check for valid data
-                if "data" in data and data["data"]:
+    # Retry logic to handle transient 403/429 from Cloudflare
+    attempts = 3
+    backoff = 3
+    last_status = None
+    for attempt in range(1, attempts+1):
+        try:
+            response = session.post(
+                url,
+                headers=headers,
+                cookies=cookies,
+                json=payload,
+                timeout=20
+            )
+            last_status = response.status_code
+            print(f"[Test] Attempt {attempt}: HTTP {response.status_code}")
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if "errors" in data:
+                        print("[Test] ❌ GraphQL Errors Found:")
+                        for error in data["errors"]:
+                            print(f"  - {error.get('message', 'Unknown error')}")
+                        return False
                     job_details = data.get("data", {}).get("jobPubDetails", {})
-                    
                     if job_details:
                         opening = job_details.get("opening", {})
                         info = opening.get("info", {})
-                        
                         print("\n[Test] ✅ Job Details Fetch SUCCESSFUL!")
                         print("-" * 70)
                         print(f"Title: {info.get('title', 'N/A')}")
                         print(f"Job ID: {info.get('id', 'N/A')}")
                         print(f"Status: {opening.get('status', 'N/A')}")
                         print(f"Posted: {opening.get('postedOn', 'N/A')}")
-                        print(f"Description: {opening.get('description', 'N/A')[:100]}...")
-                        
+                        desc = opening.get('description', '')
+                        if desc:
+                            print(f"Description: {desc[:100]}...")
                         budget = opening.get("budget", {})
                         if budget:
                             print(f"Budget: ${budget.get('amount', 'N/A')} {budget.get('currencyCode', '')}")
-                        
                         activity = opening.get("clientActivity", {})
                         if activity:
                             print(f"Applicants: {activity.get('totalApplicants', 0)}")
                             print(f"Hired: {activity.get('totalHired', 0)}")
-                        
                         buyer = job_details.get("buyer", {})
                         if buyer:
                             location = buyer.get("location", {})
                             print(f"Client Location: {location.get('city', '')}, {location.get('country', '')}")
-                            
                             stats = buyer.get("stats", {})
                             if stats:
                                 print(f"Client Rating: {stats.get('score', 'N/A')}/5")
                                 print(f"Client Total Jobs: {stats.get('totalAssignments', 0)}")
-                        
                         print("-" * 70)
                         return True
                     else:
                         print("[Test] ⚠️ Empty job details returned")
                         return False
-                else:
-                    print("[Test] ⚠️ No data in response")
+                except json.JSONDecodeError as e:
+                    print(f"[Test] ❌ Failed to parse JSON: {e}")
+                    print(f"[Test] Response preview: {response.text[:200]}")
                     return False
-                    
-            except json.JSONDecodeError as e:
-                print(f"[Test] ❌ Failed to parse JSON: {e}")
+            elif response.status_code in (401, 403, 429):
+                if attempt < attempts:
+                    print(f"[Test] ⚠️ Got {response.status_code}; retrying after {backoff}s...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                else:
+                    print(f"[Test] ❌ Final attempt received {response.status_code}")
+                    return False
+            else:
+                print(f"[Test] ❌ Unexpected status code: {response.status_code}")
                 print(f"[Test] Response preview: {response.text[:200]}")
                 return False
-                
-        elif response.status_code == 401:
-            print("[Test] ❌ Authentication Failed (401)")
-            print("[Test] Headers/cookies are invalid or expired")
+        except Exception as e:
+            if attempt < attempts:
+                print(f"[Test] ⚠️ Attempt {attempt} failed: {e}. Retrying in {backoff}s...")
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            print(f"[Test] ❌ Request failed after {attempts} attempts: {e}")
             return False
-            
-        elif response.status_code == 403:
-            print("[Test] ❌ Access Forbidden (403)")
-            print("[Test] Possible rate limiting or blocked request")
-            return False
-            
+    return False
+
+def _enrich_headers(raw_headers, cookies, referer_url):
+    """Normalize and enrich headers for Upwork GraphQL public job details.
+
+    Ensures required semantic headers are present. Firefox vs Chrome sometimes
+    yields lowercase keys; we normalize case-insensitively and add fallbacks.
+    """
+    if not raw_headers:
+        raw_headers = {}
+    # Case-insensitive normalization
+    normalized = {}
+    for k, v in raw_headers.items():
+        # keep canonical capitalization for common headers
+        lower = k.lower()
+        if lower == 'user-agent':
+            normalized['User-Agent'] = v
+        elif lower == 'content-type':
+            normalized['Content-Type'] = v
+        elif lower == 'accept':
+            normalized['Accept'] = v
+        elif lower == 'accept-language':
+            normalized['Accept-Language'] = v
+        elif lower == 'origin':
+            normalized['Origin'] = v
+        elif lower == 'referer':
+            normalized['Referer'] = v
         else:
-            print(f"[Test] ❌ Unexpected status code: {response.status_code}")
-            print(f"[Test] Response preview: {response.text[:200]}")
-            return False
-            
-    except Exception as e:
-        print(f"[Test] ❌ Request failed: {e}")
-        return False
+            normalized[k] = v
+    # Mandatory defaults
+    normalized.setdefault('Accept', 'application/json, text/plain, */*')
+    normalized.setdefault('Content-Type', 'application/json')
+    normalized.setdefault('Origin', 'https://www.upwork.com')
+    if referer_url:
+        normalized.setdefault('Referer', referer_url)
+    # Some Upwork endpoints seem sensitive to Accept-Language
+    normalized.setdefault('Accept-Language', 'en-US,en;q=0.9')
+    # Add a UA if missing
+    normalized.setdefault('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36')
+    # Remove headers that can cause 403 if stale
+    for h in list(normalized.keys()):
+        if h.lower() in ('content-length', 'host', 'authority'):
+            normalized.pop(h, None)
+    # If we captured a visitor id cookie, propagate as header variant sometimes used
+    if cookies:
+        for k in cookies.keys():
+            if 'visitor' in k.lower() and 'visitor' not in ' '.join(normalized.keys()).lower():
+                normalized.setdefault('vnd-eo-visitorId', cookies[k])
+                break
+    return normalized
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed.
@@ -230,8 +272,13 @@ def get_upwork_headers():
     except Exception:
         pass
 
-    use_firefox = force_firefox or is_ubuntu
-    engine_desc = "Firefox" if use_firefox else "Chrome (undetected)"
+    # Strategy change (2025-10-04): Prefer undetected Chrome first on ALL platforms unless
+    # user explicitly forces Firefox. Ubuntu sometimes failed to gather the same
+    # Cloudflare / challenge cookies in headless Firefox, causing subsequent
+    # public job detail GraphQL fetch to fail with 403/401. We'll attempt Chrome
+    # (uc) first; if it fails we fall back to Firefox automatically.
+    use_firefox = force_firefox  # initial choice only from env now
+    engine_desc = "Firefox (forced)" if use_firefox else "Chrome attempt (uc)"
     print(f"[Auth Bot] Starting browser engine: {engine_desc} | force_firefox={force_firefox} is_ubuntu={is_ubuntu}")
 
     def _ensure_geckodriver():
@@ -409,46 +456,65 @@ def get_upwork_headers():
 
                 print("[Auth Bot] Injecting network monitor...")
                 monitor_script = """
-                window.capturedRequests = [];
-                const originalFetch = window.fetch;
-                window.fetch = function(...args) {
-                    const url = args[0];
-                    const options = args[1] || {};
-                    if (typeof url === 'string' && url.includes('visitorJobSearch')) {
-                        window.capturedRequests.push({
-                            url: url,
-                            headers: options.headers || {},
-                            method: options.method || 'GET',
-                            type: 'fetch'
-                        });
+                (function(){
+                    function shouldCapture(u){
+                        if(!u || typeof u !== 'string') return false;
+                        u = u.toLowerCase();
+                        // capture search, job details & generic graphql calls
+                        return (
+                            u.includes('visitorjobsearch') ||
+                            u.includes('jobpubdetails') ||
+                            (u.includes('/graphql') && (u.includes('job') || u.includes('search')))
+                        );
                     }
-                    return originalFetch.apply(this, args);
-                };
-                const originalXHROpen = XMLHttpRequest.prototype.open;
-                const originalXHRSend = XMLHttpRequest.prototype.send;
-                const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-                XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
-                    this._method = method;
-                    this._url = url;
-                    this._headers = {};
-                    return originalXHROpen.apply(this, arguments);
-                };
-                XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-                    this._headers[header] = value;
-                    return originalSetHeader.call(this, header, value);
-                };
-                XMLHttpRequest.prototype.send = function(data) {
-                    if (this._url && this._url.includes('visitorJobSearch')) {
-                        window.capturedRequests.push({
-                            url: this._url,
-                            method: this._method,
-                            headers: this._headers || {},
-                            data: data,
-                            type: 'xhr'
-                        });
-                    }
-                    return originalXHRSend.apply(this, arguments);
-                };
+                    window.capturedRequests = window.capturedRequests || [];
+                    const originalFetch = window.fetch;
+                    window.fetch = function(...args){
+                        try {
+                            const url = args[0];
+                            const options = args[1] || {};
+                            if(shouldCapture(url)){
+                                window.capturedRequests.push({
+                                    ts: Date.now(),
+                                    url: url,
+                                    headers: options.headers || {},
+                                    method: (options.method || 'GET').toUpperCase(),
+                                    body: options.body || null,
+                                    type: 'fetch'
+                                });
+                            }
+                        } catch(e) {}
+                        return originalFetch.apply(this, args);
+                    };
+                    const originalXHROpen = XMLHttpRequest.prototype.open;
+                    const originalXHRSend = XMLHttpRequest.prototype.send;
+                    const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                    XMLHttpRequest.prototype.open = function(method, url, async, user, password){
+                        this._method = method;
+                        this._url = url;
+                        this._headers = {};
+                        return originalXHROpen.apply(this, arguments);
+                    };
+                    XMLHttpRequest.prototype.setRequestHeader = function(header, value){
+                        try { this._headers[header] = value; } catch(e) {}
+                        return originalSetHeader.call(this, header, value);
+                    };
+                    XMLHttpRequest.prototype.send = function(data){
+                        try {
+                            if(shouldCapture(this._url)){
+                                window.capturedRequests.push({
+                                    ts: Date.now(),
+                                    url: this._url,
+                                    method: (this._method || 'GET').toUpperCase(),
+                                    headers: this._headers || {},
+                                    body: data || null,
+                                    type: 'xhr'
+                                });
+                            }
+                        } catch(e) {}
+                        return originalXHRSend.apply(this, arguments);
+                    };
+                })();
                 """
                 try:
                     sb.execute_script(monitor_script)
@@ -487,15 +553,50 @@ def get_upwork_headers():
                     except Exception as e:
                         print(f"[Auth Bot] ❌ Could not click page 2: {e}")
 
+                # NEW: Trigger a job details view to force a jobPubDetails GraphQL request
+                print("[Auth Bot] Forcing a job details request (click first job card if available)...")
+                try:
+                    # Try various selectors for first job link
+                    job_link_selectors = [
+                        'a[data-test="job-tile-title-link"]',
+                        '.air3-card a[href*="/jobs/"]',
+                        'section a[href*="/jobs/"]',
+                    ]
+                    clicked_job = False
+                    for sel in job_link_selectors:
+                        if sb.is_element_visible(sel):
+                            sb.scroll_to_element(sel)
+                            sb.sleep(1)
+                            sb.click(sel)
+                            print(f"[Auth Bot] ✅ Clicked job link via selector: {sel}")
+                            clicked_job = True
+                            break
+                    if not clicked_job:
+                        # fallback: open first job card details via JS
+                        opened = sb.execute_script("var l=document.querySelector('a[href*=/jobs/]'); if(l){ l.click(); return true;} return false;")
+                        if opened:
+                            print("[Auth Bot] ✅ Clicked job link via JS fallback")
+                        else:
+                            print("[Auth Bot] ⚠️ Could not locate a job link to click")
+                    sb.sleep(4)  # allow navigation / xhr
+                except Exception as e:
+                    print(f"[Auth Bot] ⚠️ Job details trigger error: {e}")
+
                 print("[Auth Bot] Waiting for GraphQL / search requests...")
-                sb.sleep(5)
+                sb.sleep(4)
                 print("[Auth Bot] Analyzing network requests...")
                 try:
-                    captured_requests = sb.execute_script("return window.capturedRequests || [];")
-                    print(f"[Auth Bot] Captured {len(captured_requests)} requests")
+                    captured_requests = sb.execute_script("return (window.capturedRequests || []).slice(-25);")  # limit to last 25 for clarity
+                    print(f"[Auth Bot] Captured {len(captured_requests)} relevant requests")
                     if captured_requests:
-                        latest_request = captured_requests[-1]
-                        headers_found = latest_request.get('headers', {})
+                        # Prefer a job details GraphQL request if present
+                        preferred = None
+                        for req in reversed(captured_requests):
+                            if 'jobpubdetails' in req.get('url','').lower():
+                                preferred = req
+                                break
+                        latest_request = preferred or captured_requests[-1]
+                        headers_found = dict(latest_request.get('headers', {}) or {})
                         if not headers_found:
                             print("[Auth Bot] No headers captured, creating fallback...")
                             user_agent = sb.execute_script("return navigator.userAgent;")
@@ -523,7 +624,7 @@ def get_upwork_headers():
                     print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
                     return False
 
-                print("[Auth Bot] Capturing cookies...")
+                print("[Auth Bot] Capturing cookies (post job details click)...")
                 try:
                     cookies = {}
                     for cookie in sb.get_cookies():
@@ -540,6 +641,17 @@ def get_upwork_headers():
                     cookies_found = None
         except Exception as sb_launch_error:
             print(f"[Auth Bot] ⚠️ SeleniumBase launch failed: {sb_launch_error}")
+            # If Chrome attempt failed (not forced Firefox), retry with Firefox once
+            if not use_firefox and not force_firefox:
+                print("[Auth Bot] 🔁 Falling back to Firefox after Chrome failure...")
+                use_firefox = True
+                try:
+                    # Re-enter with Firefox (recursive like but single retry)
+                    os.environ['FORCE_FIREFOX'] = '1'
+                    return get_upwork_headers()
+                finally:
+                    if 'FORCE_FIREFOX' in os.environ and not force_firefox:
+                        del os.environ['FORCE_FIREFOX']
             if use_firefox:
                 print("[Auth Bot] 🔁 Attempting raw Selenium Firefox fallback...")
                 try:
@@ -648,6 +760,10 @@ def get_upwork_headers():
             print(f"[Auth Bot] Headers to test: {len(headers_found)} keys")
             print(f"[Auth Bot] Cookies to test: {len(cookies_found)} keys")
             
+            # Enrich headers before testing
+            current_url = headers_found.get('Referer') or headers_found.get('referer') or 'https://www.upwork.com/nx/search/jobs/'
+            headers_found = _enrich_headers(headers_found, cookies_found, current_url)
+
             test_success = test_job_details_fetch(headers_found, cookies_found)
             
             if test_success:
