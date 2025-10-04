@@ -31,6 +31,8 @@ import tempfile
 import tarfile
 import stat
 import urllib.request
+import uuid
+import zipfile
 
 # Patch asyncio to allow nested event loops (fixes RuntimeError in Jupyter/IPython/Python 3.10+)
 try:
@@ -274,6 +276,43 @@ def _attempt_extract_visitor_ids(sb):
                   }
                 }
               }
+              // Also check session storage
+              if(!out.visitor) {
+                try {
+                  for(let i=0;i<sessionStorage.length;i++) {
+                    const k = sessionStorage.key(i);
+                    const v = sessionStorage.getItem(k);
+                    if(/visitor/i.test(k) && v && v.length > 10 && v.length < 80) {
+                      out.visitor = v;
+                      break;
+                    }
+                  }
+                } catch(e) {}
+              }
+              // Try to extract from page HTML/scripts as fallback
+              if(!out.visitor) {
+                const scripts = document.querySelectorAll('script');
+                for(let script of scripts) {
+                  const text = script.textContent || script.innerText || '';
+                  const match = text.match(/["']([a-f0-9-]{20,40})["'].*visitor/i) || text.match(/visitor.*["']([a-f0-9-]{20,40})["']/i);
+                  if(match && match[1]) {
+                    out.visitor = match[1];
+                    break;
+                  }
+                }
+              }
+              // Check for any stored authentication tokens that might contain visitor info
+              if(!out.visitor) {
+                for(const [k,v] of Object.entries(out.storage)) {
+                  if(typeof v === 'string' && v.length >= 20 && v.length <= 60) {
+                    // Look for hex-like patterns that could be visitor IDs
+                    if(/^[a-f0-9-]{20,50}$/i.test(v) && (k.toLowerCase().includes('auth') || k.toLowerCase().includes('token') || k.toLowerCase().includes('id'))) {
+                      out.visitor = v;
+                      break;
+                    }
+                  }
+                }
+              }
             } catch(e) { out.error = e.toString(); }
             return out;
             """
@@ -281,10 +320,29 @@ def _attempt_extract_visitor_ids(sb):
         visitor = ids.get('visitor') if isinstance(ids, dict) else None
         trace = ids.get('trace') if isinstance(ids, dict) else None
         print(f"[Auth Bot] 🔍 Storage scan: {len(ids.get('storage', {}))} localStorage, {len(ids.get('cookies', {}))} cookies")
+        if visitor:
+            print(f"[Auth Bot] 🔑 Visitor ID found: {len(visitor)} chars, source: {_identify_visitor_source(ids, visitor)}")
         return visitor, trace
     except Exception as e:
         print(f"[Auth Bot] ⚠️ Visitor ID extraction failed: {e}")
         return None, None
+
+def _identify_visitor_source(ids, visitor_id):
+    """Helper to identify where the visitor ID was found"""
+    if not isinstance(ids, dict) or not visitor_id:
+        return "unknown"
+    
+    # Check localStorage
+    for k, v in ids.get('storage', {}).items():
+        if v == visitor_id:
+            return f"localStorage[{k}]"
+    
+    # Check cookies
+    for k, v in ids.get('cookies', {}).items():
+        if v == visitor_id:
+            return f"cookie[{k}]"
+    
+    return "script/fallback"
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed.
@@ -407,7 +465,6 @@ def get_upwork_headers():
             print(f"[Auth Bot] ⬇️ Downloading {os.path.basename(asset)} ...")
             urllib.request.urlretrieve(asset, archive_file)
             if archive_ext == ".zip":
-                import zipfile
                 with zipfile.ZipFile(archive_file, 'r') as zf:
                     zf.extractall(tmpdir)
             else:
@@ -722,6 +779,22 @@ def get_upwork_headers():
                                     headers_found['vnd-eo-visitorId'] = str(cookie_value)
                                     print(f"[Auth Bot] 🔑 Found visitor ID in cookie '{cookie_name}': {str(cookie_value)[:12]}...")
                                     break
+                            # Also check for any long hex-like values that could be visitor IDs
+                            if 'vnd-eo-visitorId' not in headers_found:
+                                for cookie_name, cookie_value in cookies_found.items():
+                                    val_str = str(cookie_value)
+                                    # Look for hex-like strings 20+ chars long
+                                    if len(val_str) >= 20 and len(val_str) <= 50 and all(c in '0123456789abcdefABCDEF-_' for c in val_str):
+                                        headers_found['vnd-eo-visitorId'] = val_str
+                                        print(f"[Auth Bot] 🔑 Using potential visitor ID from cookie '{cookie_name}': {val_str[:12]}...")
+                                        break
+                        
+                        # Final fallback: if still no visitor ID after all attempts, create synthetic one
+                        if 'vnd-eo-visitorId' not in headers_found:
+                            print("[Auth Bot] ⚠️ No visitor ID found after all attempts, generating synthetic ID...")
+                            synthetic_visitor_id = str(uuid.uuid4()).replace('-', '')[:32]
+                            headers_found['vnd-eo-visitorId'] = synthetic_visitor_id
+                            print(f"[Auth Bot] 🔑 Using synthetic visitor ID: {synthetic_visitor_id[:12]}...")
                     else:
                         print("[Auth Bot] ✅ Visitor ID already present in headers")
                 except Exception as e:
@@ -762,29 +835,131 @@ def get_upwork_headers():
                     from selenium import webdriver as _webdriver
                     from selenium.webdriver.firefox.options import Options as _FxOptions
                     from selenium.webdriver.firefox.service import Service as _FxService
+                    
+                    # Enhanced geckodriver search for Ubuntu
                     search_candidates = [
                         os.environ.get("GECKODRIVER"),
                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "drivers", "geckodriver"),
                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "drivers", "geckodriver.exe"),
+                        "/snap/bin/geckodriver",  # Common on Ubuntu with snap
                         "/usr/local/bin/geckodriver",
                         "/usr/bin/geckodriver",
+                        "/opt/geckodriver",  # Common manual install location
+                        os.path.expanduser("~/bin/geckodriver"),
+                        os.path.expanduser("~/.local/bin/geckodriver"),
                     ]
-                    gecko_path = next((p for p in search_candidates if p and os.path.exists(p)), None)
+                    
+                    gecko_path = None
+                    for candidate in search_candidates:
+                        if candidate and os.path.exists(candidate):
+                            # Test if it's executable
+                            try:
+                                if os.access(candidate, os.X_OK):
+                                    gecko_path = candidate
+                                    print(f"[Auth Bot] Firefox fallback: Found geckodriver at {gecko_path}")
+                                    break
+                                else:
+                                    print(f"[Auth Bot] Firefox fallback: Found but not executable: {candidate}")
+                            except Exception:
+                                continue
+                    
                     if not gecko_path:
+                        print("[Auth Bot] Firefox fallback: No valid geckodriver found, attempting auto-download...")
                         gecko_path = _ensure_geckodriver()
+                    
                     if not gecko_path:
                         print("[Auth Bot] ❌ No geckodriver found for raw fallback.")
                         return False
+                    
                     fx_opts = _FxOptions()
                     fx_opts.add_argument("-headless")
                     # Override User-Agent to appear as Chrome on Windows for better compatibility
                     fx_opts.set_preference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-                    service = _FxService(executable_path=gecko_path)
+                    # Add additional Firefox preferences for better Ubuntu compatibility
+                    fx_opts.set_preference("dom.webdriver.enabled", False)
+                    fx_opts.set_preference("useAutomationExtension", False)
+                    fx_opts.set_preference("media.peerconnection.enabled", False)
+                    
+                    try:
+                        service = _FxService(executable_path=gecko_path)
+                        print(f"[Auth Bot] Firefox fallback: Starting Firefox with {gecko_path}")
+                    except Exception as service_e:
+                        print(f"[Auth Bot] Firefox fallback: Service creation failed: {service_e}")
+                        return False
                     driver = _webdriver.Firefox(options=fx_opts, service=service)
                     try:
                         driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
                         print("[Auth Bot] Firefox fallback: Waiting for page load...")
                         time.sleep(8)
+                        
+                        # Inject the same network monitoring script as Chrome
+                        print("[Auth Bot] Firefox fallback: Injecting network monitor...")
+                        monitor_script = """
+                        (function(){
+                            function shouldCapture(u){
+                                if(!u || typeof u !== 'string') return false;
+                                u = u.toLowerCase();
+                                // capture search, job details & generic graphql calls
+                                return (
+                                    u.includes('visitorjobsearch') ||
+                                    u.includes('jobpubdetails') ||
+                                    (u.includes('/graphql') && (u.includes('job') || u.includes('search')))
+                                );
+                            }
+                            window.capturedRequests = window.capturedRequests || [];
+                            const originalFetch = window.fetch;
+                            window.fetch = function(...args){
+                                try {
+                                    const url = args[0];
+                                    const options = args[1] || {};
+                                    if(shouldCapture(url)){
+                                        window.capturedRequests.push({
+                                            ts: Date.now(),
+                                            url: url,
+                                            headers: options.headers || {},
+                                            method: (options.method || 'GET').toUpperCase(),
+                                            body: options.body || null,
+                                            type: 'fetch'
+                                        });
+                                    }
+                                } catch(e) {}
+                                return originalFetch.apply(this, args);
+                            };
+                            const originalXHROpen = XMLHttpRequest.prototype.open;
+                            const originalXHRSend = XMLHttpRequest.prototype.send;
+                            const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+                            XMLHttpRequest.prototype.open = function(method, url, async, user, password){
+                                this._method = method;
+                                this._url = url;
+                                this._headers = {};
+                                return originalXHROpen.apply(this, arguments);
+                            };
+                            XMLHttpRequest.prototype.setRequestHeader = function(header, value){
+                                try { this._headers[header] = value; } catch(e) {}
+                                return originalSetHeader.call(this, header, value);
+                            };
+                            XMLHttpRequest.prototype.send = function(data){
+                                try {
+                                    if(shouldCapture(this._url)){
+                                        window.capturedRequests.push({
+                                            ts: Date.now(),
+                                            url: this._url,
+                                            method: (this._method || 'GET').toUpperCase(),
+                                            headers: this._headers || {},
+                                            body: data || null,
+                                            type: 'xhr'
+                                        });
+                                    }
+                                } catch(e) {}
+                                return originalXHRSend.apply(this, arguments);
+                            };
+                        })();
+                        """
+                        try:
+                            driver.execute_script(monitor_script)
+                            print("[Auth Bot] Firefox fallback: ✅ Network monitor active")
+                        except Exception as e:
+                            print(f"[Auth Bot] Firefox fallback: ⚠️ Could not inject monitor: {e}")
                         
                         # Wait for jobs to load
                         try:
@@ -799,16 +974,123 @@ def get_upwork_headers():
                         
                         time.sleep(5)
                         
+                        # Try pagination to trigger search requests
+                        print("[Auth Bot] Firefox fallback: Looking for pagination...")
+                        page_2_selectors = [
+                            'button[data-ev-page_index="2"]',
+                            'a[data-ev-page_index="2"]',
+                            'button[aria-label="Go to page 2"]',
+                            '.pagination button:nth-child(3)',
+                            'li[data-page="2"] button'
+                        ]
+                        page_2_found = False
+                        for selector in page_2_selectors:
+                            try:
+                                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                                if elements:
+                                    driver.execute_script("arguments[0].scrollIntoView();", elements[0])
+                                    time.sleep(2)
+                                    driver.execute_script("arguments[0].click();", elements[0])
+                                    print(f"[Auth Bot] Firefox fallback: ✅ Clicked page 2: {selector}")
+                                    page_2_found = True
+                                    break
+                            except Exception:
+                                continue
+                        if not page_2_found:
+                            print("[Auth Bot] Firefox fallback: ⚠️ Page 2 not found, trying JS click...")
+                            try:
+                                driver.execute_script("""
+                                    const pageBtn = document.querySelector('[data-ev-page_index="2"]');
+                                    if (pageBtn) pageBtn.click();
+                                """)
+                                print("[Auth Bot] Firefox fallback: ✅ Clicked page 2 via JS")
+                            except Exception as e:
+                                print(f"[Auth Bot] Firefox fallback: ❌ Could not click page 2: {e}")
+                        
+                        time.sleep(3)  # Wait for pagination request
+                        
                         # Try to click on a job to trigger GraphQL requests
                         print("[Auth Bot] Firefox fallback: Attempting to click job for GraphQL trigger...")
                         try:
-                            job_link = driver.find_element(By.CSS_SELECTOR, 'a[href*="/jobs/"]')
-                            if job_link:
-                                driver.execute_script("arguments[0].click();", job_link)
-                                print("[Auth Bot] Firefox fallback: Clicked job link")
-                                time.sleep(4)
+                            # Use better selectors and try multiple approaches
+                            job_link_selectors = [
+                                'a[data-test="job-tile-title-link"]',
+                                '.air3-card a[href*="/jobs/"]',
+                                'section a[href*="/jobs/"]',
+                                'a[href*="/jobs/"]'
+                            ]
+                            clicked_job = False
+                            for sel in job_link_selectors:
+                                try:
+                                    elements = driver.find_elements(By.CSS_SELECTOR, sel)
+                                    if elements:
+                                        driver.execute_script("arguments[0].scrollIntoView();", elements[0])
+                                        time.sleep(1)
+                                        driver.execute_script("arguments[0].click();", elements[0])
+                                        print(f"[Auth Bot] Firefox fallback: ✅ Clicked job link via selector: {sel}")
+                                        clicked_job = True
+                                        break
+                                except Exception:
+                                    continue
+                            if not clicked_job:
+                                # fallback: open first job card details via JS
+                                opened = driver.execute_script("var l=document.querySelector('a[href*=/jobs/]'); if(l){ l.click(); return true;} return false;")
+                                if opened:
+                                    print("[Auth Bot] Firefox fallback: ✅ Clicked job link via JS fallback")
+                                else:
+                                    print("[Auth Bot] Firefox fallback: ⚠️ Could not locate a job link to click")
+                            time.sleep(4)  # Wait for job details request
                         except Exception as job_e:
                             print(f"[Auth Bot] Firefox fallback: Could not click job: {job_e}")
+                        
+                        # Now analyze captured requests like Chrome does
+                        print("[Auth Bot] Firefox fallback: Analyzing captured requests...")
+                        try:
+                            captured_requests = driver.execute_script("return (window.capturedRequests || []).slice(-25);")
+                            print(f"[Auth Bot] Firefox fallback: Captured {len(captured_requests)} relevant requests")
+                            
+                            headers_found = None
+                            if captured_requests:
+                                # Save captured requests for debugging
+                                try:
+                                    debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'captured_requests_debug_firefox.json')
+                                    with open(debug_path, 'w') as df:
+                                        json.dump(captured_requests, df, indent=2)
+                                    print(f"[Auth Bot] Firefox fallback: 🗂 Saved captured requests to {debug_path}")
+                                except Exception:
+                                    pass
+                                
+                                # Prefer a job details GraphQL request if present
+                                preferred = None
+                                for req in reversed(captured_requests):
+                                    if 'jobpubdetails' in req.get('url','').lower():
+                                        preferred = req
+                                        break
+                                latest_request = preferred or captured_requests[-1]
+                                headers_found = dict(latest_request.get('headers', {}) or {})
+                                
+                                # If we have a job details request body, persist its ID for dynamic testing
+                                try:
+                                    if preferred and preferred.get('body'):
+                                        body_raw = preferred.get('body')
+                                        job_id_candidate = None
+                                        try:
+                                            body_json = json.loads(body_raw)
+                                            vars_obj = body_json.get('variables') if isinstance(body_json, dict) else None
+                                            job_id_candidate = vars_obj.get('id') if vars_obj else None
+                                        except Exception:
+                                            pass
+                                        if job_id_candidate:
+                                            jid_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'job_details_last_id.txt')
+                                            with open(jid_path, 'w') as jf:
+                                                jf.write(str(job_id_candidate))
+                                            print(f"[Auth Bot] Firefox fallback: 🧾 Saved last job details ID: {job_id_candidate}")
+                                except Exception:
+                                    pass
+                                
+                                print(f"[Auth Bot] Firefox fallback: ✅ Headers captured from {latest_request.get('type', 'unknown')}")
+                        except Exception as e:
+                            print(f"[Auth Bot] Firefox fallback: ⚠️ Error analyzing requests: {e}")
                         
                         ua = driver.execute_script("return navigator.userAgent;")
                         
@@ -848,6 +1130,29 @@ def get_upwork_headers():
                                       }
                                     }
                                   }
+                                  // Also check session storage
+                                  try {
+                                    for(let i=0;i<sessionStorage.length;i++) {
+                                      const k = sessionStorage.key(i);
+                                      const v = sessionStorage.getItem(k);
+                                      if(!out.visitor && /visitor/i.test(k) && v && v.length > 10 && v.length < 80) {
+                                        out.visitor = v;
+                                        break;
+                                      }
+                                    }
+                                  } catch(e) {}
+                                  // Try to extract from page HTML/scripts as fallback
+                                  if(!out.visitor) {
+                                    const scripts = document.querySelectorAll('script');
+                                    for(let script of scripts) {
+                                      const text = script.textContent || script.innerText || '';
+                                      const match = text.match(/["']([a-f0-9-]{20,40})["'].*visitor/i) || text.match(/visitor.*["']([a-f0-9-]{20,40})["']/i);
+                                      if(match && match[1]) {
+                                        out.visitor = match[1];
+                                        break;
+                                      }
+                                    }
+                                  }
                                 } catch(e) { out.error = e.toString(); }
                                 return out;
                                 """
@@ -856,18 +1161,33 @@ def get_upwork_headers():
                             trace_id = ids.get('trace') if isinstance(ids, dict) else None
                             print(f"[Auth Bot] Firefox fallback: Found visitor_id: {visitor_id[:12] + '...' if visitor_id else 'None'}")
                             print(f"[Auth Bot] Firefox fallback: Found trace_id: {trace_id[:12] + '...' if trace_id else 'None'}")
+                            
+                            # Additional debugging
+                            if visitor_id:
+                                print(f"[Auth Bot] Firefox fallback: 🔑 Visitor ID successfully extracted: {len(visitor_id)} chars")
+                            else:
+                                storage_count = len(ids.get('storage', {})) if isinstance(ids, dict) else 0
+                                cookies_count = len(ids.get('cookies', {})) if isinstance(ids, dict) else 0
+                                print(f"[Auth Bot] Firefox fallback: ⚠️ No visitor ID found. Storage: {storage_count}, Cookies: {cookies_count}")
                         except Exception as vid_e:
                             print(f"[Auth Bot] Firefox fallback: Visitor ID extraction failed: {vid_e}")
                         
-                        # Create initial headers with Windows User-Agent for better compatibility
-                        headers_found = {
-                            'Accept': 'application/json, text/plain, */*',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Content-Type': 'application/json',
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                            'Referer': driver.current_url,
-                            'Origin': 'https://www.upwork.com'
-                        }
+                        # Create initial headers - use captured headers if available, otherwise fallback
+                        if headers_found and len(headers_found) > 3:
+                            print("[Auth Bot] Firefox fallback: Using captured headers from network requests")
+                            # Ensure Windows User-Agent even if captured differently
+                            if 'User-Agent' in headers_found:
+                                headers_found['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+                        else:
+                            print("[Auth Bot] Firefox fallback: Using fallback headers (no network requests captured)")
+                            headers_found = {
+                                'Accept': 'application/json, text/plain, */*',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Content-Type': 'application/json',
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                                'Referer': driver.current_url,
+                                'Origin': 'https://www.upwork.com'
+                            }
                         
                         # Add visitor ID to headers if found
                         if visitor_id:
@@ -876,19 +1196,59 @@ def get_upwork_headers():
                         if trace_id:
                             headers_found['vnd-eo-trace-id'] = trace_id
                         
+                        # Capture cookies and also try to find visitor ID in cookies if not found yet
                         cookies_found = {c['name']: c['value'] for c in driver.get_cookies()}
+                        print(f"[Auth Bot] Firefox fallback: ✅ Captured {len(cookies_found)} cookies")
+                        
+                        # If still no visitor ID, try extracting from cookies more aggressively
+                        if not visitor_id:
+                            print("[Auth Bot] Firefox fallback: Attempting visitor ID extraction from cookies...")
+                            for cookie_name, cookie_value in cookies_found.items():
+                                if 'visitor' in cookie_name.lower() and len(str(cookie_value)) > 10:
+                                    headers_found['vnd-eo-visitorId'] = str(cookie_value)
+                                    print(f"[Auth Bot] Firefox fallback: 🔑 Found visitor ID in cookie '{cookie_name}': {str(cookie_value)[:12]}...")
+                                    break
+                            # Also check for any long hex-like values that could be visitor IDs
+                            if 'vnd-eo-visitorId' not in headers_found:
+                                for cookie_name, cookie_value in cookies_found.items():
+                                    val_str = str(cookie_value)
+                                    # Look for hex-like strings 20+ chars long
+                                    if len(val_str) >= 20 and len(val_str) <= 50 and all(c in '0123456789abcdefABCDEF-_' for c in val_str):
+                                        headers_found['vnd-eo-visitorId'] = val_str
+                                        print(f"[Auth Bot] Firefox fallback: 🔑 Using potential visitor ID from cookie '{cookie_name}': {val_str[:12]}...")
+                                        break
+                        
+                        # Save cookies
                         script_dir = os.path.dirname(os.path.abspath(__file__))
                         with open(os.path.join(script_dir, "upwork_cookies.json"), "w") as f:
                             json.dump(cookies_found, f, indent=2)
-                        print(f"[Auth Bot] ✅ Raw Firefox fallback captured {len(cookies_found)} cookies")
                         
                         # Apply the same header enrichment logic as the main path
                         print("[Auth Bot] Firefox fallback: Enriching headers...")
                         headers_found = _enrich_headers(headers_found, cookies_found, driver.current_url)
+                        
+                        # Final fallback: if still no visitor ID, create a synthetic one
+                        if 'vnd-eo-visitorId' not in headers_found:
+                            print("[Auth Bot] Firefox fallback: ⚠️ No visitor ID found, generating synthetic ID...")
+                            import uuid
+                            synthetic_visitor_id = str(uuid.uuid4()).replace('-', '')[:32]
+                            headers_found['vnd-eo-visitorId'] = synthetic_visitor_id
+                            print(f"[Auth Bot] Firefox fallback: 🔑 Using synthetic visitor ID: {synthetic_visitor_id[:12]}...")
+                        
                         print(f"[Auth Bot] Firefox fallback: ✅ Headers enriched, total count: {len(headers_found)}")
                         
+                        # Verify visitor ID is present
+                        if 'vnd-eo-visitorId' in headers_found:
+                            vid_value = headers_found['vnd-eo-visitorId']
+                            print(f"[Auth Bot] Firefox fallback: ✅ Final visitor ID confirmation: {vid_value[:12]}... (length: {len(vid_value)})")
+                        else:
+                            print("[Auth Bot] Firefox fallback: ❌ WARNING: Still no visitor ID after all attempts!")
+                        
                     finally:
-                        driver.quit()
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
                 except Exception as raw_e:
                     print(f"[Auth Bot] ❌ Raw Firefox fallback failed: {raw_e}")
                     return False
