@@ -240,26 +240,50 @@ def _enrich_headers(raw_headers, cookies, referer_url):
     return normalized
 
 def _attempt_extract_visitor_ids(sb):
-        """Try to extract visitor / trace identifiers from localStorage or cookies."""
-        try:
-                ids = sb.execute_script(
-                        """
-                        const out = {visitor:null, trace:null, storage:{}};
-                        try {
-                            for (let i=0;i<localStorage.length;i++) {
-                                const k = localStorage.key(i);
-                                const v = localStorage.getItem(k);
-                                out.storage[k]=v;
-                                if(!out.visitor && /visitor/i.test(k) && v && v.length < 80) out.visitor = v;
-                                if(!out.trace && /trace/i.test(k) && v && v.length < 80) out.trace = v;
-                            }
-                        } catch(e) {}
-                        return out;
-                        """
-                )
-                return ids.get('visitor') if isinstance(ids, dict) else None, ids.get('trace') if isinstance(ids, dict) else None
-        except Exception:
-                return None, None
+    """Try to extract visitor / trace identifiers from localStorage or cookies."""
+    try:
+        ids = sb.execute_script(
+            """
+            const out = {visitor:null, trace:null, storage:{}, cookies:{}};
+            try {
+              // Check localStorage
+              for (let i=0;i<localStorage.length;i++) {
+                const k = localStorage.key(i);
+                const v = localStorage.getItem(k);
+                out.storage[k]=v;
+                if(!out.visitor && /visitor/i.test(k) && v && v.length < 80) out.visitor = v;
+                if(!out.trace && /trace/i.test(k) && v && v.length < 80) out.trace = v;
+              }
+              // Check document cookies
+              const cookies = document.cookie.split(';');
+              for(let cookie of cookies) {
+                const [name, value] = cookie.trim().split('=');
+                if(name && value) {
+                  out.cookies[name] = value;
+                  if(!out.visitor && /visitor/i.test(name) && value.length < 80) out.visitor = value;
+                  if(!out.trace && /trace/i.test(name) && value.length < 80) out.trace = value;
+                }
+              }
+              // Look for common Upwork visitor patterns
+              if(!out.visitor) {
+                for(const [k,v] of Object.entries(out.storage)) {
+                  if(/eo.*visitor|visitor.*id|user.*id/i.test(k) && v && v.length > 10 && v.length < 50) {
+                    out.visitor = v;
+                    break;
+                  }
+                }
+              }
+            } catch(e) { out.error = e.toString(); }
+            return out;
+            """
+        )
+        visitor = ids.get('visitor') if isinstance(ids, dict) else None
+        trace = ids.get('trace') if isinstance(ids, dict) else None
+        print(f"[Auth Bot] 🔍 Storage scan: {len(ids.get('storage', {}))} localStorage, {len(ids.get('cookies', {}))} cookies")
+        return visitor, trace
+    except Exception as e:
+        print(f"[Auth Bot] ⚠️ Visitor ID extraction failed: {e}")
+        return None, None
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed.
@@ -598,6 +622,15 @@ def get_upwork_headers():
                     captured_requests = sb.execute_script("return (window.capturedRequests || []).slice(-25);")  # limit to last 25 for clarity
                     print(f"[Auth Bot] Captured {len(captured_requests)} relevant requests")
                     if captured_requests:
+                        # Save all captured requests for offline debugging
+                        try:
+                            debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'captured_requests_debug.json')
+                            with open(debug_path, 'w') as df:
+                                json.dump(captured_requests, df, indent=2)
+                            print(f"[Auth Bot] 🗂 Saved captured requests to {debug_path}")
+                        except Exception as dre:
+                            print(f"[Auth Bot] ⚠️ Could not save captured requests debug file: {dre}")
+                        
                         # Prefer a job details GraphQL request if present
                         preferred = None
                         for req in reversed(captured_requests):
@@ -606,6 +639,27 @@ def get_upwork_headers():
                                 break
                         latest_request = preferred or captured_requests[-1]
                         headers_found = dict(latest_request.get('headers', {}) or {})
+                        
+                        # If we have a job details request body, persist its ID for dynamic testing
+                        try:
+                            if preferred and preferred.get('body'):
+                                body_raw = preferred.get('body')
+                                job_id_candidate = None
+                                try:
+                                    body_json = json.loads(body_raw)
+                                    vars_obj = body_json.get('variables') if isinstance(body_json, dict) else None
+                                    job_id_candidate = vars_obj.get('id') if vars_obj else None
+                                except Exception:
+                                    # body may be FormData or stringified differently
+                                    pass
+                                if job_id_candidate:
+                                    jid_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'job_details_last_id.txt')
+                                    with open(jid_path, 'w') as jf:
+                                        jf.write(str(job_id_candidate))
+                                    print(f"[Auth Bot] 🧾 Saved last job details ID: {job_id_candidate}")
+                        except Exception as id_e:
+                            print(f"[Auth Bot] ⚠️ Could not extract job id from request body: {id_e}")
+                        
                         if not headers_found:
                             print("[Auth Bot] No headers captured, creating fallback...")
                             user_agent = sb.execute_script("return navigator.userAgent;")
@@ -780,6 +834,16 @@ def get_upwork_headers():
             # Enrich headers before testing
             current_url = headers_found.get('Referer') or headers_found.get('referer') or 'https://www.upwork.com/nx/search/jobs/'
             headers_found = _enrich_headers(headers_found, cookies_found, current_url)
+            
+            # Re-save enriched headers to ensure visitor ID and other enrichments are persisted
+            try:
+                with open(headers_file, "w") as f:
+                    json.dump(headers_found, f, indent=2)
+                with open(job_details_headers_file, "w") as f:
+                    json.dump(headers_found, f, indent=2)
+                print(f"[Auth Bot] ✅ Re-saved enriched headers with {len(headers_found)} total keys")
+            except Exception as e:
+                print(f"[Auth Bot] ⚠️ Could not re-save enriched headers: {e}")
 
             test_success = test_job_details_fetch(headers_found, cookies_found)
             
