@@ -258,6 +258,15 @@ def get_upwork_headers():
                 os.access(os.path.join(path, "geckodriver"), os.X_OK)
                 for path in os.environ.get("PATH", "").split(os.pathsep)
             )
+            # If geckodriver exists in common locations but not in PATH, set env var for Selenium
+            gecko_common = ["/usr/local/bin/geckodriver", "/usr/bin/geckodriver", "/snap/bin/geckodriver"]
+            if not gecko_in_path:
+                for gp in gecko_common:
+                    if os.path.exists(gp) and os.access(gp, os.X_OK):
+                        os.environ.setdefault("GECKODRIVER", gp)
+                        gecko_in_path = True
+                        print(f"[Auth Bot] ✅ Using detected geckodriver: {gp}")
+                        break
             if not gecko_in_path:
                 print("[Auth Bot] ⚠️ geckodriver not found in PATH. Attempting automatic install...")
                 try:
@@ -298,16 +307,17 @@ def get_upwork_headers():
                     print(f"[Auth Bot] ❌ Auto-install geckodriver failed: {auto_e}")
                     print("[Auth Bot] Manual install example:\n  LATEST=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r '.tag_name') && \\\n  curl -LO https://github.com/mozilla/geckodriver/releases/download/${LATEST}/geckodriver-${LATEST}-linux-aarch64.tar.gz && \\\n  tar -xzf geckodriver-*.tar.gz && sudo install -m 0755 geckodriver /usr/local/bin/geckodriver")
 
-        with SB(**sb_kwargs) as sb:
-            url = "https://www.upwork.com/nx/search/jobs/?q=python"
-            if not use_firefox:
-                # Activate CDP only for Chromium-based browsers
-                try:
-                    sb.activate_cdp_mode(url)
-                except Exception as e:
-                    print(f"[Auth Bot] CDP activation skipped: {e}")
-            else:
-                sb.open(url)
+        try:
+            with SB(**sb_kwargs) as sb:
+                url = "https://www.upwork.com/nx/search/jobs/?q=python"
+                if not use_firefox:
+                    # Activate CDP only for Chromium-based browsers
+                    try:
+                        sb.activate_cdp_mode(url)
+                    except Exception as e:
+                        print(f"[Auth Bot] CDP activation skipped: {e}")
+                else:
+                    sb.open(url)
             
             print("[Auth Bot] Waiting for Cloudflare bypass...")
             
@@ -437,22 +447,35 @@ def get_upwork_headers():
                 except Exception as e:
                     print(f"[Auth Bot] ❌ Could not click page 2: {e}")
 
-            # Wait for GraphQL request
-            print("[Auth Bot] Waiting for GraphQL / search requests...")
-            sb.sleep(5)  # allow network activity
+                # Wait for GraphQL request
+                print("[Auth Bot] Waiting for GraphQL / search requests...")
+                sb.sleep(5)  # allow network activity
 
-            # Check captured requests
-            print("[Auth Bot] Analyzing network requests...")
-            try:
-                captured_requests = sb.execute_script("return window.capturedRequests || [];")
-                print(f"[Auth Bot] Captured {len(captured_requests)} requests")
-                
-                if captured_requests:
-                    latest_request = captured_requests[-1]
-                    headers_found = latest_request.get('headers', {})
+                # Check captured requests
+                print("[Auth Bot] Analyzing network requests...")
+                try:
+                    captured_requests = sb.execute_script("return window.capturedRequests || [];")
+                    print(f"[Auth Bot] Captured {len(captured_requests)} requests")
                     
-                    if not headers_found or len(headers_found) == 0:
-                        print("[Auth Bot] No headers captured, creating fallback...")
+                    if captured_requests:
+                        latest_request = captured_requests[-1]
+                        headers_found = latest_request.get('headers', {})
+                        
+                        if not headers_found or len(headers_found) == 0:
+                            print("[Auth Bot] No headers captured, creating fallback...")
+                            user_agent = sb.execute_script("return navigator.userAgent;")
+                            headers_found = {
+                                'Accept': 'application/json, text/plain, */*',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Content-Type': 'application/json',
+                                'User-Agent': user_agent,
+                                'Referer': sb.get_current_url(),
+                                'Origin': 'https://www.upwork.com'
+                            }
+                        
+                        print(f"[Auth Bot] ✅ Headers captured from {latest_request.get('type', 'unknown')}")
+                    else:
+                        print("[Auth Bot] No requests captured, using fallback headers...")
                         user_agent = sb.execute_script("return navigator.userAgent;")
                         headers_found = {
                             'Accept': 'application/json, text/plain, */*',
@@ -462,45 +485,75 @@ def get_upwork_headers():
                             'Referer': sb.get_current_url(),
                             'Origin': 'https://www.upwork.com'
                         }
-                    
-                    print(f"[Auth Bot] ✅ Headers captured from {latest_request.get('type', 'unknown')}")
-                else:
-                    print("[Auth Bot] No requests captured, using fallback headers...")
-                    user_agent = sb.execute_script("return navigator.userAgent;")
-                    headers_found = {
-                        'Accept': 'application/json, text/plain, */*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Content-Type': 'application/json',
-                        'User-Agent': user_agent,
-                        'Referer': sb.get_current_url(),
-                        'Origin': 'https://www.upwork.com'
-                    }
-                    
-            except Exception as e:
-                print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
-                return False
+                        
+                except Exception as e:
+                    print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
+                    return False
 
-            # Capture cookies
-            print("[Auth Bot] Capturing cookies...")
-            try:
-                cookies = {}
-                for cookie in sb.get_cookies():
-                    cookies[cookie['name']] = cookie['value']
-                print(f"[Auth Bot] ✅ Captured {len(cookies)} cookies")
-                
-                # IMPORTANT: Set cookies_found BEFORE saving
-                cookies_found = cookies
-                
-                # Save cookies with consistent path
-                script_dir = os.path.dirname(os.path.abspath(__file__)) if os.path.dirname(__file__) else os.getcwd()
-                cookies_file = os.path.join(script_dir, "upwork_cookies.json")
-                with open(cookies_file, "w") as f:
-                    json.dump(cookies, f, indent=2)
-                print(f"[Auth Bot] ✅ Cookies saved to {cookies_file}")
-                
-            except Exception as e:
-                print(f"[Auth Bot] ⚠️ Cookie error: {e}")
-                cookies_found = None  # Explicitly set to None on error
+                # Capture cookies
+                print("[Auth Bot] Capturing cookies...")
+                try:
+                    cookies = {}
+                    for cookie in sb.get_cookies():
+                        cookies[cookie['name']] = cookie['value']
+                    print(f"[Auth Bot] ✅ Captured {len(cookies)} cookies")
+                    cookies_found = cookies
+                    script_dir = os.path.dirname(os.path.abspath(__file__)) if os.path.dirname(__file__) else os.getcwd()
+                    cookies_file = os.path.join(script_dir, "upwork_cookies.json")
+                    with open(cookies_file, "w") as f:
+                        json.dump(cookies, f, indent=2)
+                    print(f"[Auth Bot] ✅ Cookies saved to {cookies_file}")
+                except Exception as e:
+                    print(f"[Auth Bot] ⚠️ Cookie error: {e}")
+                    cookies_found = None
+
+        except Exception as sb_launch_error:
+            print(f"[Auth Bot] ⚠️ SeleniumBase launch failed: {sb_launch_error}")
+            if use_firefox:
+                print("[Auth Bot] 🔁 Attempting raw Selenium Firefox fallback...")
+                try:
+                    from selenium import webdriver as _webdriver
+                    from selenium.webdriver.firefox.options import Options as _FxOptions
+                    from selenium.webdriver.firefox.service import Service as _FxService
+                    gecko_path = os.environ.get("GECKODRIVER") or next((p for p in ["/usr/local/bin/geckodriver","/usr/bin/geckodriver"] if os.path.exists(p)), None)
+                    if not gecko_path:
+                        print("[Auth Bot] ❌ No geckodriver found for raw fallback.")
+                        return False
+                    fx_opts = _FxOptions()
+                    fx_opts.add_argument("-headless")
+                    service = _FxService(executable_path=gecko_path)
+                    driver = _webdriver.Firefox(options=fx_opts, service=service)
+                    try:
+                        driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
+                        time.sleep(8)
+                        # Inject monitor
+                        try:
+                            driver.execute_script("""window.capturedRequests=[];""")
+                        except Exception:
+                            pass
+                        # Collect UA for fallback headers
+                        ua = driver.execute_script("return navigator.userAgent;")
+                        headers_found = {
+                            'Accept': 'application/json, text/plain, */*',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Content-Type': 'application/json',
+                            'User-Agent': ua,
+                            'Referer': driver.current_url,
+                            'Origin': 'https://www.upwork.com'
+                        }
+                        # Cookies
+                        cookies_found = {c['name']: c['value'] for c in driver.get_cookies()}
+                        script_dir = os.path.dirname(os.path.abspath(__file__))
+                        with open(os.path.join(script_dir, "upwork_cookies.json"), "w") as f:
+                            json.dump(cookies_found, f, indent=2)
+                        print(f"[Auth Bot] ✅ Raw Firefox fallback captured {len(cookies_found)} cookies")
+                    finally:
+                        driver.quit()
+                except Exception as raw_e:
+                    print(f"[Auth Bot] ❌ Raw Firefox fallback failed: {raw_e}")
+                    return False
+            else:
+                return False
 
     except Exception as e:
         print(f"[Auth Bot] ❌ Automation error: {e}")
