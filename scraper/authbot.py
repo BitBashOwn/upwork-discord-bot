@@ -403,11 +403,7 @@ def get_upwork_headers():
             locale="en",
             headless=True,
             page_load_strategy="eager",
-            chromium_arg="--no-sandbox",
-            chromium_arg2="--disable-dev-shm-usage",
-            chromium_arg3="--disable-gpu",
-            chromium_arg4="--disable-software-rasterizer",
-            chromium_arg5="--disable-blink-features=AutomationControlled"
+            chromium_arg="--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-blink-features=AutomationControlled"
         ) as sb:
             headers_found, cookies_found = _capture_headers_and_cookies(sb)
     except OSError as oe:
@@ -431,9 +427,20 @@ def get_upwork_headers():
         system_chromedriver = None
         try:
             import shutil
-            system_chromedriver = shutil.which('chromedriver')
-            if system_chromedriver:
-                print(f"[Auth Bot] 🎯 Found system chromedriver: {system_chromedriver}")
+            # Look for system chromedriver, not the SeleniumBase one
+            potential_paths = ['/usr/bin/chromedriver', '/usr/local/bin/chromedriver']
+            for path in potential_paths:
+                if os.path.exists(path) and os.access(path, os.X_OK):
+                    system_chromedriver = path
+                    print(f"[Auth Bot] 🎯 Found system chromedriver: {system_chromedriver}")
+                    break
+            
+            if not system_chromedriver:
+                # Fallback to which command, but exclude SeleniumBase paths
+                which_result = shutil.which('chromedriver')
+                if which_result and 'seleniumbase' not in which_result:
+                    system_chromedriver = which_result
+                    print(f"[Auth Bot] 🎯 Found chromedriver via which: {system_chromedriver}")
         except Exception:
             pass
         
@@ -445,11 +452,7 @@ def get_upwork_headers():
                 "locale": "en",
                 "headless": True,
                 "page_load_strategy": "eager",
-                "chromium_arg": "--no-sandbox",
-                "chromium_arg2": "--disable-dev-shm-usage",
-                "chromium_arg3": "--disable-gpu",
-                "chromium_arg4": "--disable-software-rasterizer",
-                "chromium_arg5": "--disable-blink-features=AutomationControlled"
+                "chromium_arg": "--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-blink-features=AutomationControlled"
             }
             
             # Use system chromedriver if available (better for ARM64)
