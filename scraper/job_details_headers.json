@@ -1,10 +1,9 @@
 {
-  "X-Upwork-Accept-Language": "en-US",
-  "vnd-eo-visitorId": "39.45.37.249.1759493227318000",
-  "Accept-Encoding": "gzip",
+  "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
   "Content-Type": "application/json",
-  "vnd-eo-trace-id": "988c513db39f2490-SEA",
-  "vnd-eo-span-id": "ed8ca5bb-6a89-4423-bb9c-b741df63af9a",
-  "vnd-eo-parent-span-id": "3a9f96e2-6f27-48a5-97b0-3ba29f5e5e96",
-  "Authorization": "Bearer oauth2v2_d3cf7ce7f954d91fab87b6a101118846"
+  "Origin": "https://www.upwork.com",
+  "Referer": "https://www.upwork.com/nx/search/jobs/"
 }

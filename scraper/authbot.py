@@ -20,11 +20,13 @@ if sys.version_info >= (3, 11):
     asyncio.get_event_loop = _get_running_loop
 # -----------------------------------------------------------
 
+import requests
 import json
 import time
 from seleniumbase import SB
 import os
 import sys
+import traceback
 
 # Patch asyncio to allow nested event loops (fixes RuntimeError in Jupyter/IPython/Python 3.10+)
 try:
@@ -32,6 +34,10 @@ try:
     nest_asyncio.apply()
 except ImportError:
     pass  # If not available, ignore, but recommend installing it if error persists
+
+# Add parent directory to path to import config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import UPWORK_EMAIL, UPWORK_PASSWORD
 
 # -----------------------------------------------------------
 # Environment detection utilities
@@ -78,6 +84,7 @@ def _is_wsl_ubuntu() -> bool:
         return is_ubuntu
     except Exception:
         return False
+
 
 def test_job_details_fetch(headers, cookies):
     """Test fetching job details with captured credentials"""
@@ -250,6 +257,7 @@ def test_job_details_fetch(headers, cookies):
     except Exception as e:
         print(f"[Test] ❌ Request failed: {e}")
         return False
+
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed"""
@@ -606,6 +614,7 @@ def get_upwork_headers():
         print("[Auth Bot] ❌ No headers found")
         return False
 
+
 def verify_headers():
     """Verify that saved headers are valid"""
     try:
@@ -645,11 +654,13 @@ def verify_headers():
         else:
             print("[Auth Bot] ❌ Headers file not found")
             return False
+            
     except Exception as e:
         print(f"[Auth Bot] ❌ Verification error: {e}")
         import traceback
         traceback.print_exc()
         return False
+
 
 def main():
     """Main function for standalone execution"""
@@ -689,6 +700,7 @@ def main():
         sys.exit(1)
     
     print("=" * 70)
+
 
 if __name__ == "__main__":
     main()
