@@ -441,6 +441,12 @@ def get_upwork_headers():
                 if which_result and 'seleniumbase' not in which_result:
                     system_chromedriver = which_result
                     print(f"[Auth Bot] 🎯 Found chromedriver via which: {system_chromedriver}")
+
+            # Detect snap chromium chromedriver (ARM64-compatible) if present
+            snap_candidate = '/snap/chromium/current/usr/lib/chromium-browser/chromedriver'
+            if not system_chromedriver and os.path.exists(snap_candidate):
+                system_chromedriver = snap_candidate
+                print(f"[Auth Bot] 🎯 Found snap chromedriver: {system_chromedriver}")
         except Exception:
             pass
         
@@ -455,10 +461,12 @@ def get_upwork_headers():
                 "chromium_arg": "--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-blink-features=AutomationControlled"
             }
             
-            # Use system chromedriver if available (better for ARM64)
+            # Use system chromedriver if available by exporting env var SeleniumBase/Selenium respect
             if system_chromedriver:
-                sb_args["driver_executable_path"] = system_chromedriver
-                print(f"[Auth Bot] 🔧 Using system chromedriver for ARM64 compatibility")
+                # Set both common environment variables used by Selenium discovery logic
+                os.environ['CHROMEDRIVER'] = system_chromedriver
+                os.environ['WEBDRIVER_CHROME_DRIVER'] = system_chromedriver
+                print(f"[Auth Bot] 🔧 Using system chromedriver (env) for ARM64 compatibility: {system_chromedriver}")
             
             with SB(**sb_args) as sb:
                 if not headers_found:
@@ -467,7 +475,47 @@ def get_upwork_headers():
         except Exception as e:
             print(f"[Auth Bot] ❌ Fallback standard Chrome failed: {e}")
             import traceback; traceback.print_exc()
-            return False
+            # Last-resort: direct Selenium fallback (Selenium Manager auto driver)
+            try:
+                from selenium import webdriver
+                from selenium.webdriver.chrome.options import Options
+                from selenium.webdriver.common.by import By
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.support import expected_conditions as EC
+                print("[Auth Bot] 🔁 Trying direct Selenium Manager fallback...")
+                chrome_opts = Options()
+                chrome_opts.add_argument('--headless=new')
+                chrome_opts.add_argument('--no-sandbox')
+                chrome_opts.add_argument('--disable-dev-shm-usage')
+                chrome_opts.add_argument('--disable-gpu')
+                chrome_opts.add_argument('--disable-software-rasterizer')
+                chrome_opts.add_argument('--disable-blink-features=AutomationControlled')
+                driver = webdriver.Chrome(options=chrome_opts)
+                try:
+                    driver.get('https://www.upwork.com/nx/search/jobs/?q=python')
+                    WebDriverWait(driver, 20).until(lambda d: 'Just a moment' not in d.page_source)
+                    # Basic wait for a job card-like element (fallback heuristic)
+                    try:
+                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, '.air3-card')))
+                    except Exception:
+                        pass
+                    # Collect minimal headers & cookies
+                    ua = driver.execute_script('return navigator.userAgent;')
+                    headers_found = {
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Content-Type': 'application/json',
+                        'User-Agent': ua,
+                        'Referer': driver.current_url,
+                        'Origin': 'https://www.upwork.com'
+                    }
+                    cookies_found = {c['name']: c['value'] for c in driver.get_cookies()}
+                    print(f"[Auth Bot] ✅ Direct Selenium fallback captured {len(cookies_found)} cookies")
+                finally:
+                    driver.quit()
+            except Exception as se:
+                print(f"[Auth Bot] ❌ Direct Selenium fallback failed: {se}")
+                return False
 
     # Debug summary identical to prior logic
     print(f"\n[Auth Bot] 📊 Capture Summary:")
