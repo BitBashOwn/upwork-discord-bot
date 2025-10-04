@@ -748,8 +748,83 @@ def get_upwork_headers():
                     driver = _webdriver.Firefox(options=fx_opts, service=service)
                     try:
                         driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
+                        print("[Auth Bot] Firefox fallback: Waiting for page load...")
                         time.sleep(8)
+                        
+                        # Wait for jobs to load
+                        try:
+                            from selenium.webdriver.support.ui import WebDriverWait
+                            from selenium.webdriver.support import expected_conditions as EC
+                            from selenium.webdriver.common.by import By
+                            wait = WebDriverWait(driver, 15)
+                            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".air3-card")))
+                            print("[Auth Bot] Firefox fallback: Jobs loaded")
+                        except Exception:
+                            print("[Auth Bot] Firefox fallback: Jobs timeout - continuing anyway")
+                        
+                        time.sleep(5)
+                        
+                        # Try to click on a job to trigger GraphQL requests
+                        print("[Auth Bot] Firefox fallback: Attempting to click job for GraphQL trigger...")
+                        try:
+                            job_link = driver.find_element(By.CSS_SELECTOR, 'a[href*="/jobs/"]')
+                            if job_link:
+                                driver.execute_script("arguments[0].click();", job_link)
+                                print("[Auth Bot] Firefox fallback: Clicked job link")
+                                time.sleep(4)
+                        except Exception as job_e:
+                            print(f"[Auth Bot] Firefox fallback: Could not click job: {job_e}")
+                        
                         ua = driver.execute_script("return navigator.userAgent;")
+                        
+                        # Extract visitor IDs using the same logic as SeleniumBase version
+                        print("[Auth Bot] Firefox fallback: Extracting visitor IDs...")
+                        visitor_id = None
+                        trace_id = None
+                        try:
+                            ids = driver.execute_script(
+                                """
+                                const out = {visitor:null, trace:null, storage:{}, cookies:{}};
+                                try {
+                                  // Check localStorage
+                                  for (let i=0;i<localStorage.length;i++) {
+                                    const k = localStorage.key(i);
+                                    const v = localStorage.getItem(k);
+                                    out.storage[k]=v;
+                                    if(!out.visitor && /visitor/i.test(k) && v && v.length < 80) out.visitor = v;
+                                    if(!out.trace && /trace/i.test(k) && v && v.length < 80) out.trace = v;
+                                  }
+                                  // Check document cookies
+                                  const cookies = document.cookie.split(';');
+                                  for(let cookie of cookies) {
+                                    const [name, value] = cookie.trim().split('=');
+                                    if(name && value) {
+                                      out.cookies[name] = value;
+                                      if(!out.visitor && /visitor/i.test(name) && value.length < 80) out.visitor = value;
+                                      if(!out.trace && /trace/i.test(name) && value.length < 80) out.trace = value;
+                                    }
+                                  }
+                                  // Look for common Upwork visitor patterns
+                                  if(!out.visitor) {
+                                    for(const [k,v] of Object.entries(out.storage)) {
+                                      if(/eo.*visitor|visitor.*id|user.*id/i.test(k) && v && v.length > 10 && v.length < 50) {
+                                        out.visitor = v;
+                                        break;
+                                      }
+                                    }
+                                  }
+                                } catch(e) { out.error = e.toString(); }
+                                return out;
+                                """
+                            )
+                            visitor_id = ids.get('visitor') if isinstance(ids, dict) else None
+                            trace_id = ids.get('trace') if isinstance(ids, dict) else None
+                            print(f"[Auth Bot] Firefox fallback: Found visitor_id: {visitor_id[:12] + '...' if visitor_id else 'None'}")
+                            print(f"[Auth Bot] Firefox fallback: Found trace_id: {trace_id[:12] + '...' if trace_id else 'None'}")
+                        except Exception as vid_e:
+                            print(f"[Auth Bot] Firefox fallback: Visitor ID extraction failed: {vid_e}")
+                        
+                        # Create initial headers
                         headers_found = {
                             'Accept': 'application/json, text/plain, */*',
                             'Accept-Language': 'en-US,en;q=0.9',
@@ -758,11 +833,25 @@ def get_upwork_headers():
                             'Referer': driver.current_url,
                             'Origin': 'https://www.upwork.com'
                         }
+                        
+                        # Add visitor ID to headers if found
+                        if visitor_id:
+                            headers_found['vnd-eo-visitorId'] = visitor_id
+                            print(f"[Auth Bot] Firefox fallback: 🔑 Added visitorId to headers: {visitor_id[:12]}...")
+                        if trace_id:
+                            headers_found['vnd-eo-trace-id'] = trace_id
+                        
                         cookies_found = {c['name']: c['value'] for c in driver.get_cookies()}
                         script_dir = os.path.dirname(os.path.abspath(__file__))
                         with open(os.path.join(script_dir, "upwork_cookies.json"), "w") as f:
                             json.dump(cookies_found, f, indent=2)
                         print(f"[Auth Bot] ✅ Raw Firefox fallback captured {len(cookies_found)} cookies")
+                        
+                        # Apply the same header enrichment logic as the main path
+                        print("[Auth Bot] Firefox fallback: Enriching headers...")
+                        headers_found = _enrich_headers(headers_found, cookies_found, driver.current_url)
+                        print(f"[Auth Bot] Firefox fallback: ✅ Headers enriched, total count: {len(headers_found)}")
+                        
                     finally:
                         driver.quit()
                 except Exception as raw_e:
