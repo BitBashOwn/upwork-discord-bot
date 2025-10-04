@@ -239,6 +239,30 @@ def get_upwork_headers():
         if not use_firefox:
             # Use undetected-chromedriver mode for Chrome only
             sb_kwargs["uc"] = True
+        else:
+            # Explicitly request Firefox; otherwise SeleniumBase defaults to Chrome
+            sb_kwargs["browser"] = "firefox"
+
+        # Basic diagnostics to help user if Firefox path/driver missing
+        if use_firefox:
+            fx_bin_candidates = [
+                "/usr/bin/firefox",
+                "/snap/bin/firefox",
+                "/usr/lib/firefox/firefox",
+                "/usr/bin/firefox-esr",
+            ]
+            found_fx = next((p for p in fx_bin_candidates if os.path.exists(p)), None)
+            if not found_fx:
+                print("[Auth Bot] ⚠️ Firefox binary not found in common locations. Install with: sudo apt install -y firefox-esr")
+            gecko_in_path = any(
+                os.access(os.path.join(path, "geckodriver"), os.X_OK)
+                for path in os.environ.get("PATH", "").split(os.pathsep)
+            )
+            if not gecko_in_path:
+                print("[Auth Bot] ⚠️ geckodriver not found in PATH. Quick install example:\n"
+                      "  LATEST=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r '.tag_name') && \n"
+                      "  curl -LO https://github.com/mozilla/geckodriver/releases/download/${LATEST}/geckodriver-${LATEST}-linux-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/64/').tar.gz && \n"
+                      "  tar -xzf geckodriver-*.tar.gz && sudo install -m 0755 geckodriver /usr/local/bin/geckodriver")
 
         with SB(**sb_kwargs) as sb:
             url = "https://www.upwork.com/nx/search/jobs/?q=python"
