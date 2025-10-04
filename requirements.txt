@@ -7,3 +7,8 @@ sqlalchemy
 psycopg2-binary   # PostgreSQL
 python-dotenv
 webdriver-manager
+seleniumbase
+curl-cffi
+python-dateutil
+google-generativeai
+nest-asyncio
