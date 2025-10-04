@@ -22,7 +22,7 @@ def _get_auth_lock():
         _auth_refresh_lock = threading.Lock()
     return _auth_refresh_lock
 
-def refresh_auth_credentials():
+def refresh_auth_credentials(force=False):
     """Refresh authentication by running the auth bot in a separate thread"""
     global _last_auth_refresh_time
     
@@ -32,8 +32,8 @@ def refresh_auth_credentials():
         current_time = time.time()
         
         # Check cooldown to prevent spam refreshing
-        if current_time - _last_auth_refresh_time < AUTH_REFRESH_COOLDOWN:
-            print(f"[Job Details] Skipping auth refresh - last refresh was {int(current_time - _last_auth_refresh_time)}s ago")
+        if not force and current_time - _last_auth_refresh_time < AUTH_REFRESH_COOLDOWN:
+            print(f"[Job Details] Skipping auth refresh - last refresh was {int(current_time - _last_auth_refresh_time)}s ago (use force=True to override)")
             return False
         
         print("[Job Details] ⚠️ 401 Error detected - refreshing authentication...")
@@ -182,7 +182,9 @@ def fetch_job_details(scraper, job_id, max_retries=2):
                 if attempt < max_retries - 1:  # Don't refresh on last attempt
                     print("[Job Details] Attempting to refresh authentication...")
                     
-                    refresh_success = refresh_auth_credentials()
+                    # Force refresh if visitorId missing in previous headers
+                    need_force = 'vnd-eo-visitorId' not in headers
+                    refresh_success = refresh_auth_credentials(force=need_force)
                     
                     if refresh_success:
                         print("[Job Details] ✅ Auth refreshed, retrying job details fetch...")

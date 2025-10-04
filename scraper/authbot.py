@@ -67,7 +67,6 @@ def test_job_details_fetch(headers, cookies):
                     status
                     postedOn
                     publishTime
-                        if captured_requests:
                     workload
                     contractorTier
                     description
@@ -76,71 +75,19 @@ def test_job_details_fetch(headers, cookies):
                         id
                         type
                         title
-                            # Save all captured requests for offline debugging
-                            try:
-                                debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'captured_requests_debug.json')
-                                with open(debug_path, 'w') as df:
-                                    json.dump(captured_requests, df, indent=2)
-                                print(f"[Auth Bot] 🗂 Saved captured requests to {debug_path}")
-                            except Exception as dre:
-                                print(f"[Auth Bot] ⚠️ Could not save captured requests debug file: {dre}")
-                            # If we have a job details request body, persist its ID for dynamic testing
-                            try:
-                                if preferred and preferred.get('body'):
-                                    body_raw = preferred.get('body')
-                                    job_id_candidate = None
-                                    try:
-                                        body_json = json.loads(body_raw)
-                                        vars_obj = body_json.get('variables') if isinstance(body_json, dict) else None
-                                        job_id_candidate = vars_obj.get('id') if vars_obj else None
-                                    except Exception:
-                                        # body may be FormData or stringified differently
-                                        pass
-                                    if job_id_candidate:
-                                        jid_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'job_details_last_id.txt')
-                                        with open(jid_path, 'w') as jf:
-                                            jf.write(str(job_id_candidate))
-                                        print(f"[Auth Bot] 🧾 Saved last job details ID: {job_id_candidate}")
-                            except Exception as id_e:
-                                print(f"[Auth Bot] ⚠️ Could not extract job id from request body: {id_e}")
                         createdOn
                     }
-                    budget {
-                        amount
-                        currencyCode
-                    }
-                    clientActivity {
-                        totalApplicants
-                        totalHired
-                        totalInvitedToInterview
-                    }
+                    budget { amount currencyCode }
+                    clientActivity { totalApplicants totalHired totalInvitedToInterview }
                 }
                 buyer {
-                    location {
-                        city
-                        country
-                        countryTimezone
-                    }
-                    stats {
-                        totalAssignments
-                        feedbackCount
-                        score
-                        totalCharges {
-                            amount
-                            currencyCode
-                        }
-                    }
+                    location { city country countryTimezone }
+                    stats { totalAssignments feedbackCount score totalCharges { amount currencyCode } }
                 }
-                qualifications {
-                    minJobSuccessScore
-                    minOdeskHours
-                    risingTalent
-                }
+                qualifications { minJobSuccessScore minOdeskHours risingTalent }
             }
         }""",
-        "variables": {
-            "id": test_job_id
-        }
+        "variables": {"id": test_job_id}
     }
     
     url = "https://www.upwork.com/api/graphql/v1?alias=gql-query-get-visitor-job-details"
@@ -291,6 +238,28 @@ def _enrich_headers(raw_headers, cookies, referer_url):
     normalized.setdefault('apollographql-client-name', 'web')
     normalized.setdefault('apollographql-client-version', '1.4')
     return normalized
+
+def _attempt_extract_visitor_ids(sb):
+        """Try to extract visitor / trace identifiers from localStorage or cookies."""
+        try:
+                ids = sb.execute_script(
+                        """
+                        const out = {visitor:null, trace:null, storage:{}};
+                        try {
+                            for (let i=0;i<localStorage.length;i++) {
+                                const k = localStorage.key(i);
+                                const v = localStorage.getItem(k);
+                                out.storage[k]=v;
+                                if(!out.visitor && /visitor/i.test(k) && v && v.length < 80) out.visitor = v;
+                                if(!out.trace && /trace/i.test(k) && v && v.length < 80) out.trace = v;
+                            }
+                        } catch(e) {}
+                        return out;
+                        """
+                )
+                return ids.get('visitor') if isinstance(ids, dict) else None, ids.get('trace') if isinstance(ids, dict) else None
+        except Exception:
+                return None, None
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed.
@@ -660,6 +629,14 @@ def get_upwork_headers():
                             'Referer': sb.get_current_url(),
                             'Origin': 'https://www.upwork.com'
                         }
+                    # Attempt manual extraction of visitor / trace identifiers if missing
+                    if headers_found and not any(k.lower() == 'vnd-eo-visitorid' for k in headers_found.keys()):
+                        vid, trace = _attempt_extract_visitor_ids(sb)
+                        if vid:
+                            headers_found['vnd-eo-visitorId'] = vid
+                            print(f"[Auth Bot] 🔑 Injected visitorId from localStorage: {vid[:12]}...")
+                        if trace:
+                            headers_found.setdefault('vnd-eo-trace-id', trace)
                 except Exception as e:
                     print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
                     return False
