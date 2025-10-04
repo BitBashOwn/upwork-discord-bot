@@ -259,10 +259,44 @@ def get_upwork_headers():
                 for path in os.environ.get("PATH", "").split(os.pathsep)
             )
             if not gecko_in_path:
-                print("[Auth Bot] ⚠️ geckodriver not found in PATH. Quick install example:\n"
-                      "  LATEST=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r '.tag_name') && \n"
-                      "  curl -LO https://github.com/mozilla/geckodriver/releases/download/${LATEST}/geckodriver-${LATEST}-linux-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/64/').tar.gz && \n"
-                      "  tar -xzf geckodriver-*.tar.gz && sudo install -m 0755 geckodriver /usr/local/bin/geckodriver")
+                print("[Auth Bot] ⚠️ geckodriver not found in PATH. Attempting automatic install...")
+                try:
+                    import platform, tarfile, tempfile, shutil, urllib.request, json as _json
+                    arch = platform.machine().lower()
+                    if arch in ("aarch64", "arm64"):
+                        gd_arch = "linux-aarch64"
+                    elif arch in ("x86_64", "amd64"):
+                        gd_arch = "linux64"
+                    else:
+                        gd_arch = None
+                    if gd_arch is None:
+                        raise RuntimeError(f"Unsupported architecture for geckodriver auto-install: {arch}")
+                    api_url = "https://api.github.com/repos/mozilla/geckodriver/releases/latest"
+                    with urllib.request.urlopen(api_url, timeout=25) as r:
+                        release = _json.loads(r.read().decode())
+                    tag = release.get("tag_name")
+                    asset_name = f"geckodriver-{tag}-{gd_arch}.tar.gz"
+                    asset = next((a for a in release.get("assets", []) if asset_name in a.get("browser_download_url", "")), None)
+                    if not asset:
+                        raise RuntimeError(f"Asset {asset_name} not found in latest release")
+                    url = asset["browser_download_url"]
+                    tmpdir = tempfile.mkdtemp(prefix="gecko_dl_")
+                    archive = os.path.join(tmpdir, asset_name)
+                    print(f"[Auth Bot] Downloading {asset_name} ...")
+                    urllib.request.urlretrieve(url, archive)
+                    with tarfile.open(archive, "r:gz") as tar:
+                        tar.extract("geckodriver", path=tmpdir)
+                    target = "/usr/local/bin/geckodriver"
+                    try:
+                        shutil.copy2(os.path.join(tmpdir, "geckodriver"), target)
+                        os.chmod(target, 0o755)
+                        print(f"[Auth Bot] ✅ geckodriver installed at {target}")
+                    except PermissionError:
+                        print("[Auth Bot] ⚠️ Permission denied writing to /usr/local/bin. Run manually:\n"
+                              f"  sudo cp {os.path.join(tmpdir,'geckodriver')} /usr/local/bin/geckodriver && sudo chmod 755 /usr/local/bin/geckodriver")
+                except Exception as auto_e:
+                    print(f"[Auth Bot] ❌ Auto-install geckodriver failed: {auto_e}")
+                    print("[Auth Bot] Manual install example:\n  LATEST=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest | jq -r '.tag_name') && \\\n  curl -LO https://github.com/mozilla/geckodriver/releases/download/${LATEST}/geckodriver-${LATEST}-linux-aarch64.tar.gz && \\\n  tar -xzf geckodriver-*.tar.gz && sudo install -m 0755 geckodriver /usr/local/bin/geckodriver")
 
         with SB(**sb_kwargs) as sb:
             url = "https://www.upwork.com/nx/search/jobs/?q=python"
