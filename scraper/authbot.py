@@ -213,8 +213,8 @@ def _enrich_headers(raw_headers, cookies, referer_url):
         normalized.setdefault('Referer', referer_url)
     # Some Upwork endpoints seem sensitive to Accept-Language
     normalized.setdefault('Accept-Language', 'en-US,en;q=0.9')
-    # Add a UA if missing
-    normalized.setdefault('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36')
+    # Add a UA if missing - ALWAYS use Windows UA for better compatibility
+    normalized.setdefault('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     # Remove headers that can cause 403 if stale
     for h in list(normalized.keys()):
         if h.lower() in ('content-length', 'host', 'authority'):
@@ -229,11 +229,12 @@ def _enrich_headers(raw_headers, cookies, referer_url):
     normalized.setdefault('Sec-Fetch-Site', 'same-origin')
     normalized.setdefault('Sec-Fetch-Mode', 'cors')
     normalized.setdefault('Sec-Fetch-Dest', 'empty')
-    # Client hints (won't exactly match but acceptable baseline)
+    # Client hints (won't exactly match but acceptable baseline) - Match platform to User-Agent
     if 'sec-ch-ua' not in {k.lower(): v for k,v in normalized.items()}:
         normalized['sec-ch-ua'] = '"Chromium";v="121", "Not(A:Brand";v="8"'
     normalized.setdefault('sec-ch-ua-mobile', '?0')
-    normalized.setdefault('sec-ch-ua-platform', '"Linux"')
+    # Use Windows platform to match User-Agent for better consistency
+    normalized.setdefault('sec-ch-ua-platform', '"Windows"')
     # Apollo headers (observed in many Upwork graphql calls)
     normalized.setdefault('apollographql-client-name', 'web')
     normalized.setdefault('apollographql-client-version', '1.4')
@@ -661,36 +662,68 @@ def get_upwork_headers():
                             print(f"[Auth Bot] ⚠️ Could not extract job id from request body: {id_e}")
                         
                         if not headers_found:
-                            print("[Auth Bot] No headers captured, creating fallback...")
+                            print("[Auth Bot] No headers captured, creating comprehensive fallback...")
                             user_agent = sb.execute_script("return navigator.userAgent;")
+                            # Use Windows User-Agent even on Linux for better compatibility
+                            fallback_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
                             headers_found = {
                                 'Accept': 'application/json, text/plain, */*',
                                 'Accept-Language': 'en-US,en;q=0.9',
                                 'Content-Type': 'application/json',
-                                'User-Agent': user_agent,
+                                'User-Agent': fallback_ua,
                                 'Referer': sb.get_current_url(),
-                                'Origin': 'https://www.upwork.com'
+                                'Origin': 'https://www.upwork.com',
+                                'Sec-Fetch-Site': 'same-origin',
+                                'Sec-Fetch-Mode': 'cors',
+                                'Sec-Fetch-Dest': 'empty',
+                                'sec-ch-ua': '"Chromium";v="121", "Not(A:Brand";v="8"',
+                                'sec-ch-ua-mobile': '?0',
+                                'sec-ch-ua-platform': '"Windows"',
+                                'apollographql-client-name': 'web',
+                                'apollographql-client-version': '1.4'
                             }
                         print(f"[Auth Bot] ✅ Headers captured from {latest_request.get('type', 'unknown')}")
                     else:
-                        print("[Auth Bot] No requests captured, using fallback headers...")
+                        print("[Auth Bot] No requests captured, using comprehensive fallback headers...")
                         user_agent = sb.execute_script("return navigator.userAgent;")
+                        # Use Windows User-Agent even on Linux for better compatibility
+                        fallback_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
                         headers_found = {
                             'Accept': 'application/json, text/plain, */*',
                             'Accept-Language': 'en-US,en;q=0.9',
                             'Content-Type': 'application/json',
-                            'User-Agent': user_agent,
+                            'User-Agent': fallback_ua,
                             'Referer': sb.get_current_url(),
-                            'Origin': 'https://www.upwork.com'
+                            'Origin': 'https://www.upwork.com',
+                            'Sec-Fetch-Site': 'same-origin',
+                            'Sec-Fetch-Mode': 'cors',
+                            'Sec-Fetch-Dest': 'empty',
+                            'sec-ch-ua': '"Chromium";v="121", "Not(A:Brand";v="8"',
+                            'sec-ch-ua-mobile': '?0',
+                            'sec-ch-ua-platform': '"Windows"',
+                            'apollographql-client-name': 'web',
+                            'apollographql-client-version': '1.4'
                         }
                     # Attempt manual extraction of visitor / trace identifiers if missing
                     if headers_found and not any(k.lower() == 'vnd-eo-visitorid' for k in headers_found.keys()):
+                        print("[Auth Bot] Visitor ID missing from headers, attempting manual extraction...")
                         vid, trace = _attempt_extract_visitor_ids(sb)
                         if vid:
                             headers_found['vnd-eo-visitorId'] = vid
                             print(f"[Auth Bot] 🔑 Injected visitorId from localStorage: {vid[:12]}...")
                         if trace:
                             headers_found.setdefault('vnd-eo-trace-id', trace)
+                        
+                        # If still no visitor ID, try extracting from cookies
+                        if not vid and cookies_found:
+                            print("[Auth Bot] Attempting visitor ID extraction from cookies...")
+                            for cookie_name, cookie_value in cookies_found.items():
+                                if 'visitor' in cookie_name.lower() and len(str(cookie_value)) > 10:
+                                    headers_found['vnd-eo-visitorId'] = str(cookie_value)
+                                    print(f"[Auth Bot] 🔑 Found visitor ID in cookie '{cookie_name}': {str(cookie_value)[:12]}...")
+                                    break
+                    else:
+                        print("[Auth Bot] ✅ Visitor ID already present in headers")
                 except Exception as e:
                     print(f"[Auth Bot] ❌ Error retrieving requests: {e}")
                     return False
@@ -744,6 +777,8 @@ def get_upwork_headers():
                         return False
                     fx_opts = _FxOptions()
                     fx_opts.add_argument("-headless")
+                    # Override User-Agent to appear as Chrome on Windows for better compatibility
+                    fx_opts.set_preference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                     service = _FxService(executable_path=gecko_path)
                     driver = _webdriver.Firefox(options=fx_opts, service=service)
                     try:
@@ -824,12 +859,12 @@ def get_upwork_headers():
                         except Exception as vid_e:
                             print(f"[Auth Bot] Firefox fallback: Visitor ID extraction failed: {vid_e}")
                         
-                        # Create initial headers
+                        # Create initial headers with Windows User-Agent for better compatibility
                         headers_found = {
                             'Accept': 'application/json, text/plain, */*',
                             'Accept-Language': 'en-US,en;q=0.9',
                             'Content-Type': 'application/json',
-                            'User-Agent': ua,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                             'Referer': driver.current_url,
                             'Origin': 'https://www.upwork.com'
                         }

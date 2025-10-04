@@ -116,23 +116,38 @@ def fetch_job_details(scraper, job_id, max_retries=2):
             with open(headers_file, "r") as f:
                 headers = json.load(f)
                 print(f"[Job Details] Loaded headers from {headers_file}")
-                # Enrich headers similarly to authbot for consistency
-                from .authbot import _enrich_headers as _auth_enrich
-                headers = _auth_enrich(headers, None, headers.get('Referer') or headers.get('referer') or 'https://www.upwork.com/')
-
-            # Load cookies
-            if not os.path.exists(cookies_file):
-                print(f"[Job Details] Cookies file not found: {cookies_file}. Using no cookies.")
-                cookies = {}
-            else:
-                try:
-                    with open(cookies_file, "r") as f:
-                        cookies = json.load(f)
-                        print(f"[Job Details] Loaded cookies from {cookies_file}")
-                        cookies = {k: str(v) for k, v in cookies.items()}
-                except (json.JSONDecodeError, Exception) as e:
-                    print(f"[Job Details] Error loading cookies: {e}. Using no cookies.")
+                # Load cookies first so we can pass them to header enrichment
+                if not os.path.exists(cookies_file):
+                    print(f"[Job Details] Cookies file not found: {cookies_file}. Using no cookies.")
                     cookies = {}
+                else:
+                    try:
+                        with open(cookies_file, "r") as f:
+                            cookies = json.load(f)
+                            print(f"[Job Details] Loaded cookies from {cookies_file}")
+                            cookies = {k: str(v) for k, v in cookies.items()}
+                    except (json.JSONDecodeError, Exception) as e:
+                        print(f"[Job Details] Error loading cookies: {e}. Using no cookies.")
+                        cookies = {}
+                        
+                # Enrich headers with cookie information for better compatibility
+                from .authbot import _enrich_headers as _auth_enrich
+                headers = _auth_enrich(headers, cookies, headers.get('Referer') or headers.get('referer') or 'https://www.upwork.com/')
+
+            # Load cookies (already loaded above, but keep structure for clarity)
+            if not cookies:  # Only reload if not already loaded
+                if not os.path.exists(cookies_file):
+                    print(f"[Job Details] Cookies file not found: {cookies_file}. Using no cookies.")
+                    cookies = {}
+                else:
+                    try:
+                        with open(cookies_file, "r") as f:
+                            cookies = json.load(f)
+                            print(f"[Job Details] Loaded cookies from {cookies_file}")
+                            cookies = {k: str(v) for k, v in cookies.items()}
+                    except (json.JSONDecodeError, Exception) as e:
+                        print(f"[Job Details] Error loading cookies: {e}. Using no cookies.")
+                        cookies = {}
 
             # Build the payload
             payload = get_simplified_job_details_query(formatted_job_id)
@@ -140,12 +155,15 @@ def fetch_job_details(scraper, job_id, max_retries=2):
             # Make the request
             try:
                 import cloudscraper
+                # Always use Windows platform for better compatibility with Upwork
                 session = cloudscraper.create_scraper(
                     browser={"browser": "chrome", "platform": "windows", "mobile": False}
                 )
+                print("[Job Details] Using cloudscraper with Windows platform")
             except ImportError:
                 import requests
                 session = requests.Session()
+                print("[Job Details] Using standard requests session")
 
             url = "https://www.upwork.com/api/graphql/v1?alias=gql-query-get-visitor-job-details"
             print(f"[Job Details] Making API request (attempt {attempt + 1}/{max_retries})")
@@ -160,20 +178,33 @@ def fetch_job_details(scraper, job_id, max_retries=2):
             
             print(f"[Job Details] Response Status: {resp.status_code}")
             if resp.status_code == 401:
-                # Diagnostics: show subset of headers & cookies
-                interesting = ['User-Agent','Accept','Origin','Referer','Content-Type','vnd-eo-visitorId','apollographql-client-name']
+                # Enhanced diagnostics for Ubuntu debugging
+                print("[Job Details] 🔍 401 Error - Enhanced Diagnostics:")
+                interesting = ['User-Agent','Accept','Origin','Referer','Content-Type','vnd-eo-visitorId','apollographql-client-name','sec-ch-ua-platform']
                 print("[Job Details] 🔍 Sent headers (subset):")
                 for k in interesting:
                     if k in headers:
-                        print(f"   {k}: {headers[k]}")
+                        value = headers[k]
+                        if k == 'vnd-eo-visitorId' and len(str(value)) > 12:
+                            value = str(value)[:12] + "..."
+                        print(f"   {k}: {value}")
                 missing = [k for k in interesting if k not in headers]
                 if missing:
                     print(f"[Job Details] Missing candidate headers: {missing}")
                 if cookies:
                     cookie_keys = list(cookies.keys())[:10]
+                    visitor_cookies = [k for k in cookies.keys() if 'visitor' in k.lower()]
                     print(f"[Job Details] Cookie keys sample: {cookie_keys}")
+                    if visitor_cookies:
+                        print(f"[Job Details] Visitor cookies found: {visitor_cookies}")
+                    else:
+                        print("[Job Details] No visitor cookies found")
                 else:
                     print("[Job Details] No cookies present in request")
+                # Check for platform consistency
+                ua = headers.get('User-Agent', '')
+                platform = headers.get('sec-ch-ua-platform', '')
+                print(f"[Job Details] Platform consistency check: UA='{ua[:50]}...', Platform='{platform}'")
             
             # Handle 401 - Authentication Error
             if resp.status_code == 401:
