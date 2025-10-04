@@ -83,6 +83,18 @@ def fetch_job_details(scraper, job_id, max_retries=2):
     """
     print(f"Fetching detailed information for job ID: {job_id}")
     clean_job_id = str(job_id).lstrip("~")
+    # Allow dynamic override from last captured ID file if placeholder given
+    if clean_job_id in ("TEST", "DYNAMIC", "0", ""):
+        last_id_path = os.path.join(os.path.dirname(__file__), 'job_details_last_id.txt')
+        if os.path.exists(last_id_path):
+            try:
+                with open(last_id_path, 'r') as lf:
+                    dynamic_id = lf.read().strip()
+                if dynamic_id:
+                    print(f"[Job Details] Using dynamically captured job ID: {dynamic_id}")
+                    clean_job_id = dynamic_id.lstrip('~')
+            except Exception as e:
+                print(f"[Job Details] ⚠️ Could not read dynamic job id: {e}")
     formatted_job_id = f"~{clean_job_id}"
     print(f"Using formatted job ID for API: {formatted_job_id}")
 
@@ -104,6 +116,9 @@ def fetch_job_details(scraper, job_id, max_retries=2):
             with open(headers_file, "r") as f:
                 headers = json.load(f)
                 print(f"[Job Details] Loaded headers from {headers_file}")
+                # Enrich headers similarly to authbot for consistency
+                from .authbot import _enrich_headers as _auth_enrich
+                headers = _auth_enrich(headers, None, headers.get('Referer') or headers.get('referer') or 'https://www.upwork.com/')
 
             # Load cookies
             if not os.path.exists(cookies_file):
@@ -144,6 +159,21 @@ def fetch_job_details(scraper, job_id, max_retries=2):
             )
             
             print(f"[Job Details] Response Status: {resp.status_code}")
+            if resp.status_code == 401:
+                # Diagnostics: show subset of headers & cookies
+                interesting = ['User-Agent','Accept','Origin','Referer','Content-Type','vnd-eo-visitorId','apollographql-client-name']
+                print("[Job Details] 🔍 Sent headers (subset):")
+                for k in interesting:
+                    if k in headers:
+                        print(f"   {k}: {headers[k]}")
+                missing = [k for k in interesting if k not in headers]
+                if missing:
+                    print(f"[Job Details] Missing candidate headers: {missing}")
+                if cookies:
+                    cookie_keys = list(cookies.keys())[:10]
+                    print(f"[Job Details] Cookie keys sample: {cookie_keys}")
+                else:
+                    print("[Job Details] No cookies present in request")
             
             # Handle 401 - Authentication Error
             if resp.status_code == 401:

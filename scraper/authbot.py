@@ -67,6 +67,7 @@ def test_job_details_fetch(headers, cookies):
                     status
                     postedOn
                     publishTime
+                        if captured_requests:
                     workload
                     contractorTier
                     description
@@ -75,6 +76,33 @@ def test_job_details_fetch(headers, cookies):
                         id
                         type
                         title
+                            # Save all captured requests for offline debugging
+                            try:
+                                debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'captured_requests_debug.json')
+                                with open(debug_path, 'w') as df:
+                                    json.dump(captured_requests, df, indent=2)
+                                print(f"[Auth Bot] 🗂 Saved captured requests to {debug_path}")
+                            except Exception as dre:
+                                print(f"[Auth Bot] ⚠️ Could not save captured requests debug file: {dre}")
+                            # If we have a job details request body, persist its ID for dynamic testing
+                            try:
+                                if preferred and preferred.get('body'):
+                                    body_raw = preferred.get('body')
+                                    job_id_candidate = None
+                                    try:
+                                        body_json = json.loads(body_raw)
+                                        vars_obj = body_json.get('variables') if isinstance(body_json, dict) else None
+                                        job_id_candidate = vars_obj.get('id') if vars_obj else None
+                                    except Exception:
+                                        # body may be FormData or stringified differently
+                                        pass
+                                    if job_id_candidate:
+                                        jid_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'job_details_last_id.txt')
+                                        with open(jid_path, 'w') as jf:
+                                            jf.write(str(job_id_candidate))
+                                        print(f"[Auth Bot] 🧾 Saved last job details ID: {job_id_candidate}")
+                            except Exception as id_e:
+                                print(f"[Auth Bot] ⚠️ Could not extract job id from request body: {id_e}")
                         createdOn
                     }
                     budget {
@@ -250,6 +278,18 @@ def _enrich_headers(raw_headers, cookies, referer_url):
             if 'visitor' in k.lower() and 'visitor' not in ' '.join(normalized.keys()).lower():
                 normalized.setdefault('vnd-eo-visitorId', cookies[k])
                 break
+    # Add speculative fetch & client hint headers (some sites rely on them)
+    normalized.setdefault('Sec-Fetch-Site', 'same-origin')
+    normalized.setdefault('Sec-Fetch-Mode', 'cors')
+    normalized.setdefault('Sec-Fetch-Dest', 'empty')
+    # Client hints (won't exactly match but acceptable baseline)
+    if 'sec-ch-ua' not in {k.lower(): v for k,v in normalized.items()}:
+        normalized['sec-ch-ua'] = '"Chromium";v="121", "Not(A:Brand";v="8"'
+    normalized.setdefault('sec-ch-ua-mobile', '?0')
+    normalized.setdefault('sec-ch-ua-platform', '"Linux"')
+    # Apollo headers (observed in many Upwork graphql calls)
+    normalized.setdefault('apollographql-client-name', 'web')
+    normalized.setdefault('apollographql-client-version', '1.4')
     return normalized
 
 def get_upwork_headers():
