@@ -413,27 +413,51 @@ def get_upwork_headers():
     except OSError as oe:
         if 'Exec format error' in str(oe):
             print("[Auth Bot] ⚠️ Exec format error with UC driver. Falling back to standard Chrome.")
+            print(f"[Auth Bot] 🔧 Architecture issue detected - will use system chromedriver if available")
         else:
             print(f"[Auth Bot] ⚠️ OSError with UC driver: {oe}. Attempting fallback.")
+        headers_found = None
+        cookies_found = None
     except Exception as e:
         print(f"[Auth Bot] ⚠️ UC mode failed: {e}. Attempting fallback.")
+        headers_found = None
+        cookies_found = None
 
     # If UC attempt failed to produce headers, fallback
     if not headers_found or not cookies_found:
+        print("[Auth Bot] 🔄 Retrying capture with standard Chrome...")
+        
+        # Try to use system chromedriver if available (for ARM64 compatibility)
+        system_chromedriver = None
         try:
-            with SB(
-                uc=False,
-                browser="chrome",
-                test=True,
-                locale="en",
-                headless=True,
-                page_load_strategy="eager",
-                chromium_arg="--no-sandbox",
-                chromium_arg2="--disable-dev-shm-usage",
-                chromium_arg3="--disable-gpu",
-                chromium_arg4="--disable-software-rasterizer",
-                chromium_arg5="--disable-blink-features=AutomationControlled"
-            ) as sb:
+            import shutil
+            system_chromedriver = shutil.which('chromedriver')
+            if system_chromedriver:
+                print(f"[Auth Bot] 🎯 Found system chromedriver: {system_chromedriver}")
+        except Exception:
+            pass
+        
+        try:
+            sb_args = {
+                "uc": False,
+                "browser": "chrome",
+                "test": True,
+                "locale": "en",
+                "headless": True,
+                "page_load_strategy": "eager",
+                "chromium_arg": "--no-sandbox",
+                "chromium_arg2": "--disable-dev-shm-usage",
+                "chromium_arg3": "--disable-gpu",
+                "chromium_arg4": "--disable-software-rasterizer",
+                "chromium_arg5": "--disable-blink-features=AutomationControlled"
+            }
+            
+            # Use system chromedriver if available (better for ARM64)
+            if system_chromedriver:
+                sb_args["driver_executable_path"] = system_chromedriver
+                print(f"[Auth Bot] 🔧 Using system chromedriver for ARM64 compatibility")
+            
+            with SB(**sb_args) as sb:
                 if not headers_found:
                     print("[Auth Bot] 🔄 Retrying capture with standard Chrome...")
                 headers_found, cookies_found = _capture_headers_and_cookies(sb)
