@@ -344,6 +344,48 @@ def _identify_visitor_source(ids, visitor_id):
     
     return "script/fallback"
 
+def _ensure_visitor_id(headers, base_dir):
+    """Ensure headers contain a stable vnd-eo-visitorId.
+
+    Strategy:
+    1. If already present (case-insensitive), keep it.
+    2. Reuse previously generated ID from visitor_id.txt (same dir) if valid.
+    3. Otherwise generate a new UUID4 hex, persist, and inject.
+    """
+    try:
+        if not headers:
+            return headers
+        # Case-insensitive existence check
+        for k in headers.keys():
+            if k.lower() == 'vnd-eo-visitorid':
+                return headers  # Already present
+        # Attempt reuse
+        vid_file = os.path.join(base_dir, 'visitor_id.txt')
+        visitor_id = None
+        if os.path.exists(vid_file):
+            try:
+                with open(vid_file, 'r') as f:
+                    candidate = f.read().strip()
+                if candidate and 8 <= len(candidate) <= 64 and all(c in '0123456789abcdef-' for c in candidate.lower()):
+                    visitor_id = candidate
+                    print(f"[Auth Bot] ♻️ Reusing persisted visitor ID: {visitor_id[:12]}...")
+            except Exception as read_e:
+                print(f"[Auth Bot] ⚠️ Could not read visitor_id.txt: {read_e}")
+        if not visitor_id:
+            import uuid
+            visitor_id = uuid.uuid4().hex  # 32 hex chars
+            try:
+                with open(vid_file, 'w') as f:
+                    f.write(visitor_id)
+                print(f"[Auth Bot] 🆕 Generated and persisted synthetic visitor ID: {visitor_id[:12]}...")
+            except Exception as write_e:
+                print(f"[Auth Bot] ⚠️ Could not persist visitor ID: {write_e}")
+        headers['vnd-eo-visitorId'] = visitor_id
+        return headers
+    except Exception as e:
+        print(f"[Auth Bot] ⚠️ _ensure_visitor_id error: {e}")
+        return headers
+
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed.
 
@@ -1226,14 +1268,8 @@ def get_upwork_headers():
                         # Apply the same header enrichment logic as the main path
                         print("[Auth Bot] Firefox fallback: Enriching headers...")
                         headers_found = _enrich_headers(headers_found, cookies_found, driver.current_url)
-                        
-                        # Final fallback: if still no visitor ID, create a synthetic one
-                        if 'vnd-eo-visitorId' not in headers_found:
-                            print("[Auth Bot] Firefox fallback: ⚠️ No visitor ID found, generating synthetic ID...")
-                            import uuid
-                            synthetic_visitor_id = str(uuid.uuid4()).replace('-', '')[:32]
-                            headers_found['vnd-eo-visitorId'] = synthetic_visitor_id
-                            print(f"[Auth Bot] Firefox fallback: 🔑 Using synthetic visitor ID: {synthetic_visitor_id[:12]}...")
+                        # Unified visitor ID ensure (reuse persisted or create new synthetic)
+                        headers_found = _ensure_visitor_id(headers_found, script_dir)
                         
                         print(f"[Auth Bot] Firefox fallback: ✅ Headers enriched, total count: {len(headers_found)}")
                         
@@ -1318,6 +1354,8 @@ def get_upwork_headers():
             # Enrich headers before testing
             current_url = headers_found.get('Referer') or headers_found.get('referer') or 'https://www.upwork.com/nx/search/jobs/'
             headers_found = _enrich_headers(headers_found, cookies_found, current_url)
+            # Ensure stable visitor ID (persisted synthetic if real not captured)
+            headers_found = _ensure_visitor_id(headers_found, script_dir)
             
             # Re-save enriched headers to ensure visitor ID and other enrichments are persisted
             try:
