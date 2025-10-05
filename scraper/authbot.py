@@ -970,19 +970,72 @@ def get_upwork_headers():
                         return False
                     driver = _webdriver.Firefox(options=fx_opts, service=service)
                     try:
-                        driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
-                        print("[Auth Bot] Firefox fallback: Waiting for page load...")
+                        # NEW: First use cloudscraper to bypass Cloudflare, then transfer to Firefox
+                        print("[Auth Bot] Firefox fallback: Using cloudscraper to bypass Cloudflare first...")
+                        cloudscraper_success = False
+                        cf_cookies = {}
                         
-                        # Firefox fallback: Enhanced Cloudflare bypass
-                        print("[Auth Bot] Firefox fallback: Checking for Cloudflare challenge...")
-                        max_cf_attempts = 20
-                        for attempt in range(max_cf_attempts):
-                            time.sleep(4)
+                        try:
+                            import cloudscraper
+                            print("[Auth Bot] Firefox fallback: Creating cloudscraper session...")
+                            scraper = cloudscraper.create_scraper(
+                                browser={
+                                    'browser': 'firefox',
+                                    'platform': 'linux',
+                                    'mobile': False
+                                },
+                                delay=15,
+                                debug=False
+                            )
                             
+                            # Use cloudscraper to bypass Cloudflare
+                            print("[Auth Bot] Firefox fallback: Cloudscraper accessing Upwork...")
+                            cs_response = scraper.get(
+                                "https://www.upwork.com/nx/search/jobs/?q=python",
+                                timeout=30
+                            )
+                            
+                            if cs_response.status_code == 200:
+                                print("[Auth Bot] Firefox fallback: ✅ Cloudscraper bypassed Cloudflare!")
+                                cf_cookies = scraper.cookies.get_dict()
+                                print(f"[Auth Bot] Firefox fallback: Extracted {len(cf_cookies)} cookies from cloudscraper")
+                                cloudscraper_success = True
+                            else:
+                                print(f"[Auth Bot] Firefox fallback: ⚠️ Cloudscraper got {cs_response.status_code}")
+                                
+                        except ImportError:
+                            print("[Auth Bot] Firefox fallback: ⚠️ cloudscraper not available, using pure Selenium")
+                        except Exception as cs_e:
+                            print(f"[Auth Bot] Firefox fallback: ⚠️ Cloudscraper error: {cs_e}")
+                        
+                        # If cloudscraper worked, transfer cookies to Firefox
+                        if cloudscraper_success and cf_cookies:
+                            print("[Auth Bot] Firefox fallback: Transferring cloudscraper cookies to Firefox...")
+                            # Navigate to Upwork first to set domain
+                            driver.get("https://www.upwork.com")
+                            time.sleep(2)
+                            
+                            # Transfer cookies from cloudscraper to Firefox
+                            for name, value in cf_cookies.items():
+                                try:
+                                    driver.add_cookie({
+                                        'name': name,
+                                        'value': value,
+                                        'domain': '.upwork.com',
+                                        'path': '/',
+                                        'secure': True
+                                    })
+                                except Exception as cookie_e:
+                                    print(f"[Auth Bot] Firefox fallback: ⚠️ Could not add cookie {name}: {cookie_e}")
+                            
+                            print("[Auth Bot] Firefox fallback: Cookies transferred, navigating to job search...")
+                            driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
+                            time.sleep(3)
+                            
+                            # Quick check if we bypassed Cloudflare with the transferred cookies
                             current_url = driver.current_url
                             page_source = driver.page_source
                             
-                            # Check for Cloudflare challenge indicators
                             is_challenge = (
                                 "challenge-platform" in current_url or
                                 "cdn-cgi" in current_url or
@@ -992,26 +1045,54 @@ def get_upwork_headers():
                             )
                             
                             if not is_challenge:
-                                # Double-check with element presence
-                                try:
-                                    from selenium.webdriver.common.by import By
-                                    elements = driver.find_elements(By.CSS_SELECTOR, ".air3-card, [data-test='job-tile'], article")
-                                    if elements:
-                                        print(f"[Auth Bot] Firefox fallback: ✅ Cloudflare bypassed on attempt {attempt+1}!")
-                                        break
-                                except:
-                                    pass
-                            
-                            # Refresh occasionally for Firefox
-                            if attempt % 5 == 0 and attempt > 0:
-                                print(f"[Auth Bot] Firefox fallback: Refreshing page on attempt {attempt+1}")
-                                driver.refresh()
-                                time.sleep(3)
-                            
-                            print(f"[Auth Bot] Firefox fallback: Challenge detected, attempt {attempt+1}/{max_cf_attempts}")
+                                print("[Auth Bot] Firefox fallback: ✅ Cookie transfer bypassed Cloudflare!")
+                            else:
+                                print("[Auth Bot] Firefox fallback: ⚠️ Still seeing challenge after cookie transfer")
                         else:
-                            print("[Auth Bot] Firefox fallback: ⚠️ Could not bypass Cloudflare challenge")
-                            print(f"[Auth Bot] Firefox fallback: Final URL: {driver.current_url}")
+                            # Fallback to pure Selenium approach
+                            print("[Auth Bot] Firefox fallback: Using pure Selenium approach...")
+                            driver.get("https://www.upwork.com/nx/search/jobs/?q=python")
+                            print("[Auth Bot] Firefox fallback: Waiting for page load...")
+                            
+                            # Enhanced Cloudflare bypass with longer waits and more attempts
+                            print("[Auth Bot] Firefox fallback: Checking for Cloudflare challenge...")
+                            max_cf_attempts = 25  # Increased attempts
+                            for attempt in range(max_cf_attempts):
+                                time.sleep(6)  # Longer wait between attempts
+                                
+                                current_url = driver.current_url
+                                page_source = driver.page_source
+                                
+                                # Check for Cloudflare challenge indicators
+                                is_challenge = (
+                                    "challenge-platform" in current_url or
+                                    "cdn-cgi" in current_url or
+                                    "Just a moment" in page_source or
+                                    "Checking your browser" in page_source or
+                                    "Ray ID:" in page_source
+                                )
+                                
+                                if not is_challenge:
+                                    # Double-check with element presence
+                                    try:
+                                        from selenium.webdriver.common.by import By
+                                        elements = driver.find_elements(By.CSS_SELECTOR, ".air3-card, [data-test='job-tile'], article")
+                                        if elements:
+                                            print(f"[Auth Bot] Firefox fallback: ✅ Cloudflare bypassed on attempt {attempt+1}!")
+                                            break
+                                    except:
+                                        pass
+                                
+                                # More frequent page refreshes for stubborn challenges
+                                if attempt % 3 == 0 and attempt > 0:
+                                    print(f"[Auth Bot] Firefox fallback: Refreshing page on attempt {attempt+1}")
+                                    driver.refresh()
+                                    time.sleep(5)
+                                
+                                print(f"[Auth Bot] Firefox fallback: Challenge detected, attempt {attempt+1}/{max_cf_attempts}")
+                            else:
+                                print("[Auth Bot] Firefox fallback: ⚠️ Could not bypass Cloudflare challenge")
+                                print(f"[Auth Bot] Firefox fallback: Final URL: {driver.current_url}")
                         
                         time.sleep(3)  # Additional wait after bypass
                         
