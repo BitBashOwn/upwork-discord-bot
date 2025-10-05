@@ -380,15 +380,9 @@ def get_upwork_headers():
             sb_kwargs["uc"] = True
         else:
             sb_kwargs["browser"] = "firefox"
-            # Add Firefox-specific preferences (correct key: firefox_prefs)
-            # NOTE: Previous code used 'firefox_pref' (singular) which SeleniumBase
-            # does not recognize and may have led to a dict being processed where
-            # a string was expected -> causing `'dict' object has no attribute split`.
-            sb_kwargs["firefox_prefs"] = {
-                "dom.webdriver.enabled": False,
-                "useAutomationExtension": False,
-                "general.useragent.override": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0"
-            }
+            # NOTE: SeleniumBase doesn't support firefox_prefs parameter
+            # Firefox preferences would need to be set via profile or other methods
+            # For now, we'll use default Firefox settings
 
         try:
             with SB(**sb_kwargs) as sb:
