@@ -541,15 +541,11 @@ def get_upwork_headers():
             sb_kwargs["uc"] = True
         else:
             sb_kwargs["browser"] = "firefox"
-            # Add Firefox-specific arguments for better Cloudflare bypass
-            sb_kwargs["firefox_arg"] = [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage", 
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-web-security",
-                "--disable-features=VizDisplayCompositor"
-            ]
+            # Previous version passed a LIST to firefox_arg causing 'list' object has no attribute split.
+            # Remove aggressive flags (they can increase detection). Allow optional headful mode via env.
+            if os.environ.get("FIREFOX_HEADLESS", "1") == "0":
+                sb_kwargs["headless"] = False
+                print("[Auth Bot] 🦊 Firefox headful mode enabled (FIREFOX_HEADLESS=0)")
             # Set Firefox preferences via profile
             sb_kwargs["user_data_dir"] = "/tmp/firefox_profile"
             gecko_path = _ensure_geckodriver()
@@ -567,7 +563,54 @@ def get_upwork_headers():
                     except Exception as e:
                         print(f"[Auth Bot] CDP activation skipped: {e}")
                 else:
+                    # Firefox: attempt pre-bypass with cloudscraper to obtain challenge-solving cookies.
+                    pre_bypass = os.environ.get("FIREFOX_PRE_CLOUDSCRAPER", "1") == "1"
+                    transplanted = False
+                    cookies_dict = {}
+                    if pre_bypass:
+                        try:
+                            import cloudscraper
+                            print("[Auth Bot] 🦊 Pre-bypass: cloudscraper warm-up request...")
+                            cs = cloudscraper.create_scraper(browser={"browser": "firefox", "platform": "linux", "mobile": False})
+                            warm = cs.get(url, timeout=35)
+                            if warm.status_code == 200:
+                                cookies_dict = cs.cookies.get_dict()
+                                print(f"[Auth Bot] 🦊 Pre-bypass: received {len(cookies_dict)} cookies from cloudscraper")
+                            else:
+                                print(f"[Auth Bot] ⚠️ Pre-bypass status {warm.status_code}")
+                        except Exception as pre_e:
+                            print(f"[Auth Bot] ⚠️ Pre-bypass error: {pre_e}")
+                    # Open base domain first so domain context exists for cookie injection
+                    sb.open("https://www.upwork.com")
+                    sb.sleep(1.2)
+                    if cookies_dict:
+                        for name, value in cookies_dict.items():
+                            try:
+                                sb.driver.add_cookie({
+                                    "name": name,
+                                    "value": value,
+                                    "domain": ".upwork.com",
+                                    "path": "/",
+                                    "secure": True,
+                                })
+                            except Exception:
+                                continue
+                        transplanted = True
+                        print(f"[Auth Bot] 🦊 Pre-bypass: transplanted {len(cookies_dict)} cookies into Firefox")
                     sb.open(url)
+                    # Light human-like noise (ONLY if headful) to reduce detection
+                    if sb_kwargs.get("headless") is False:
+                        try:
+                            from selenium.webdriver import ActionChains
+                            actions = ActionChains(sb.driver)
+                            actions.move_by_offset(8,8).pause(0.2).move_by_offset(25,14).perform()
+                            sb.execute_script("window.scrollTo(0, 300);")
+                            sb.sleep(0.6)
+                            sb.execute_script("window.scrollTo(0, 0);")
+                        except Exception:
+                            pass
+                    if transplanted:
+                        sb.sleep(2.5)
 
                 print("[Auth Bot] Waiting for Cloudflare bypass...")
                 max_attempts = 15 if use_firefox else 8  # More attempts for Firefox
@@ -603,14 +646,20 @@ def get_upwork_headers():
                         except:
                             pass
                     
-                    if use_firefox and attempt % 3 == 0 and attempt > 0:
-                        # Firefox-specific: try refreshing the page occasionally
-                        print(f"[Auth Bot] Firefox: Refreshing page on attempt {attempt+1}")
-                        try:
-                            sb.refresh_page()
-                            sb.sleep(3)
-                        except:
-                            pass
+                    if use_firefox:
+                        # Adaptive mitigation: periodic soft reload if still challenged
+                        if is_challenge and attempt % 4 == 3:
+                            try:
+                                print(f"[Auth Bot] Firefox: Soft JS reload (attempt {attempt+1})")
+                                sb.execute_script("location.reload();")
+                            except Exception:
+                                pass
+                        # Minor DOM event noise early on (only if headful)
+                        if is_challenge and attempt < 6 and sb_kwargs.get("headless") is False:
+                            try:
+                                sb.execute_script("document.body.dispatchEvent(new Event('mousemove'))")
+                            except Exception:
+                                pass
                     
                     print(f"[Auth Bot] Attempt {attempt+1}: Still on challenge page, retrying...")
                 else:
