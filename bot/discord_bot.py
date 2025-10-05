@@ -19,6 +19,9 @@ async def fetch_and_build_job_message(job, search_context=""):
     posted_time = format_posted_time(job.get('createdDateTime'))
     
     # Build basic job message with REAL-TIME indicator
+    # Use a proper UTC, timezone-aware detection timestamp
+    detected_utc = datetime.now(timezone.utc)
+    detected_time_str = detected_utc.strftime('%H:%M')
     job_msg = (
         f"🚨** JOB ALERT** \n"
         f"**{job['title']}** \n"
@@ -26,7 +29,7 @@ async def fetch_and_build_job_message(job, search_context=""):
         f"\n"
         f"**Budget:** {job.get('budget', 'N/A')}\n"
         f"**Posted on Upwork**: {posted_time} \n"
-        f"**Detected at:** {datetime.now().strftime('%H:%M:%S')} UTC\n"
+        f"**Detected at:** {detected_time_str} UTC\n"
     )
     if skills:
         job_msg += f"**Key Skills:** `{skill_display}`\n"
