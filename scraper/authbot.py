@@ -380,11 +380,14 @@ def get_upwork_headers():
             sb_kwargs["uc"] = True
         else:
             sb_kwargs["browser"] = "firefox"
-            # Add Firefox-specific options to avoid detection
-            sb_kwargs["firefox_pref"] = {
+            # Add Firefox-specific preferences (correct key: firefox_prefs)
+            # NOTE: Previous code used 'firefox_pref' (singular) which SeleniumBase
+            # does not recognize and may have led to a dict being processed where
+            # a string was expected -> causing `'dict' object has no attribute split`.
+            sb_kwargs["firefox_prefs"] = {
                 "dom.webdriver.enabled": False,
                 "useAutomationExtension": False,
-                "general.useragent.override": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+                "general.useragent.override": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0"
             }
 
         try:
@@ -595,7 +598,13 @@ def get_upwork_headers():
                     cookies_found = {}
                     
         except Exception as sb_error:
+            # Provide richer diagnostics to track the root cause
+            import traceback as _tb
             print(f"[Auth Bot] ❌ SeleniumBase error: {sb_error}")
+            _tb.print_exc()
+            # Common cause: misnamed kwargs (e.g., firefox_pref -> firefox_prefs)
+            if "split" in str(sb_error) and isinstance(sb_kwargs.get("firefox_prefs"), dict):
+                print("[Auth Bot] 💡 Hint: Confirm SeleniumBase version supports 'firefox_prefs'.")
             return False
 
     except Exception as e:

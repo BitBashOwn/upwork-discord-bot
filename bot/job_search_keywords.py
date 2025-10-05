@@ -5,10 +5,9 @@ ADVANCED_JOB_SEARCHES = [
         "keyword": "Mobile Farm",
         "query": "Mobile farm",
         "channel_id": 1420931314328277012,
-        "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+        "filters": {  # Intermediate and Expert
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+           
         }
     },
     {
@@ -17,9 +16,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "Appium",
         "channel_id": 1420931314328277012,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -28,9 +26,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "Iphone Automation",
         "channel_id": 1420931314328277012,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -39,9 +36,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "title:(Mobile bot)",
         "channel_id": 1420931314328277012,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -50,9 +46,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "phone AND farm", 
         "channel_id": 1420931314328277012,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -61,9 +56,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "title:(android device automation)",
         "channel_id": 1420931314328277012,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     # Stealth Automation Keywords
@@ -73,9 +67,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:(Multilogin) OR description:(Multilogin)',  # Search in title or description
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -84,9 +77,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:(GoLogin) OR description:(GoLogin)',
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -95,9 +87,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:(Incognition) OR description:(Incognition)', 
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -106,9 +97,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:(AdsPower) OR description:(AdsPower)',
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     # Concept-based searches - keep these but they'll be filtered
@@ -118,9 +108,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:("browser fingerprint") OR description:("browser fingerprint")',
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -129,9 +118,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:(antidetect) OR description:(antidetect browser)',
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -140,9 +128,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": 'title:("social media automation")',
         "channel_id": 1420931377972641873,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     
@@ -153,9 +140,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "n8n",
         "channel_id": 1420931417503961170,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -164,9 +150,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "make.com",
         "channel_id": 1420931417503961170,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -175,9 +160,8 @@ ADVANCED_JOB_SEARCHES = [
         "query": "zapier",
         "channel_id": 1420931417503961170,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+           
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
         }
     },
     {
@@ -186,9 +170,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "pipedream", 
         "channel_id": 1420931417503961170,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     },
     # Web Development Keywords
@@ -198,9 +182,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "(Web AND Developer) AND (Flask OR Django OR Mern OR Express OR Electron OR NextJs OR React OR Next OR Laravel OR Frontend OR Website OR development)",
         "channel_id": 1420931454702981242,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]  # Both hourly and fixed-price
+              # Both hourly and fixed-price
         }
     },
     # TikTok Shop Keywords
@@ -210,9 +194,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "(TikTok AND Shop AND Manager)",
         "channel_id": 1420931498147577929,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     },
     # General Automation Keywords
@@ -222,9 +206,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "bot",
         "channel_id": 1420931531571990609,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     },
     {
@@ -233,9 +217,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "(selenium OR puppeteer OR playwright)",
         "channel_id": 1420931531571990609,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     },
     {
@@ -244,9 +228,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "browser automation",
         "channel_id": 1420931531571990609,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     },
     {
@@ -255,9 +239,9 @@ ADVANCED_JOB_SEARCHES = [
         "query": "Android Accessibility Service", 
         "channel_id": 1420931531571990609,
         "filters": {
-            "contractor_tier": ["2", "3"],  # Intermediate and Expert
+            
             "payment_verified": True,
-            "job_type": ["hourly", "fixed"]
+            
         }
     }
 ]

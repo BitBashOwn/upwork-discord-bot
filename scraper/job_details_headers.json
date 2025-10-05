@@ -1,10 +1,23 @@
 {
   "X-Upwork-Accept-Language": "en-US",
-  "vnd-eo-visitorId": "14.1.105.103.1759595681901000",
+  "vnd-eo-visitorId": "14.1.105.103.1759640985941000",
   "Accept-Encoding": "gzip",
   "Content-Type": "application/json",
-  "vnd-eo-trace-id": "9896169323449ed4-HKG",
-  "vnd-eo-span-id": "d75d623f-893e-4c09-9643-7260a0dea29e",
-  "vnd-eo-parent-span-id": "370c3541-42f4-46a3-8d69-811952eb7de6",
-  "Authorization": "Bearer oauth2v2_71db59ef3179416fe43e36a4b027db25"
+  "vnd-eo-trace-id": "989a68a0b12121ea-YYZ",
+  "vnd-eo-span-id": "0cdff830-0406-4ddf-9069-850f36958bce",
+  "vnd-eo-parent-span-id": "33e8f34e-c6bd-4a4f-9324-690aaa5fbdf4",
+  "Authorization": "Bearer oauth2v2_4c76e61071a7ab12e5e23655a14b3426",
+  "Accept": "application/json, text/plain, */*",
+  "Origin": "https://www.upwork.com",
+  "Referer": "https://www.upwork.com/nx/search/jobs/",
+  "Accept-Language": "en-US,en;q=0.9",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Sec-Fetch-Site": "same-origin",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Dest": "empty",
+  "sec-ch-ua": "\"Chromium\";v=\"121\", \"Not(A:Brand\";v=\"8\"",
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": "\"Windows\"",
+  "apollographql-client-name": "web",
+  "apollographql-client-version": "1.4"
 }

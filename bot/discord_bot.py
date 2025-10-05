@@ -67,10 +67,67 @@ async def fetch_and_build_job_message(job, search_context=""):
         job_msg += "\n\n**📋 DETAILED JOB INFORMATION:**\n"
         
         job_msg += "```"
+        # Job Type
         if job_details_response.get('job_type'):
             job_msg += f"\nJob Type: {job_details_response['job_type']}"
-        if job_details_response.get('engagement_duration'):
-            job_msg += f"\nDuration: {job_details_response['engagement_duration']}"
+
+        # Experience Level (fallbacks to original job dict if needed)
+        experience_level = (
+            job_details_response.get('experience_level')
+            or job.get('experience_level')
+        )
+        if experience_level:
+            # Ensure consistent capitalization
+            exp_display = str(experience_level).title()
+            job_msg += f"\nExperience Level: {exp_display}"
+
+        # Estimated / Engagement Duration
+        estimated_duration = (
+            job_details_response.get('engagement_duration')
+            or job_details_response.get('estimated_duration')
+            or job.get('duration_label')
+        )
+        if estimated_duration:
+            job_msg += f"\nEstimated Duration: {estimated_duration}"
+
+        # Weekly Hours (workload / hours per week)
+        weekly_hours = (
+            job_details_response.get('workload')
+            or job_details_response.get('hours_per_week')
+            or job.get('workload')
+            or job.get('hours_per_week')
+        )
+        if weekly_hours:
+            job_msg += f"\nWeekly Hours: {weekly_hours}"
+
+        # Proposals formatting
+        raw_proposals = (
+            job_details_response.get('proposals')
+            or job.get('proposals')
+        )
+        if raw_proposals is not None and raw_proposals != "":
+            proposals_display = None
+            try:
+                # If it's numeric try to map to ranges
+                if isinstance(raw_proposals, (int, float)) or str(raw_proposals).isdigit():
+                    p = int(raw_proposals)
+                    if p < 5:
+                        proposals_display = "Less than 5"
+                    elif p < 10:
+                        proposals_display = "5 to 10"
+                    elif p < 15:
+                        proposals_display = "10 to 15"
+                    elif p < 20:
+                        proposals_display = "15 to 20"
+                    else:
+                        proposals_display = "20+"
+                else:
+                    # If already a descriptive string, just use it
+                    proposals_display = str(raw_proposals)
+            except Exception:
+                proposals_display = str(raw_proposals)
+            if proposals_display:
+                job_msg += f"\nProposals: {proposals_display}"
         job_msg += "\n```\n"
         
         job_msg += "**CLIENT INFORMATION:**\n```"
@@ -165,7 +222,7 @@ async def process_single_search(search):
                     continue
 
             # BUILD COMPLETE MESSAGE WITH ALL DETAILS
-            complete_message = await fetch_and_build_job_message(job, f"{search['keyword']} in {search['category']}")
+            complete_message = await fetch_and_build_job_message(job, f"{search['keyword']}")
             
             # Skip if auth failed
             if complete_message is None:
