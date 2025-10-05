@@ -564,7 +564,11 @@ def get_upwork_headers():
                         print(f"[Auth Bot] CDP activation skipped: {e}")
                 else:
                     # Firefox: attempt pre-bypass with cloudscraper to obtain challenge-solving cookies.
-                    pre_bypass = os.environ.get("FIREFOX_PRE_CLOUDSCRAPER", "1") == "1"
+                    # Allow disabling all non-Selenium pre-bypass logic via FIREFOX_SB_ONLY=1
+                    sb_only = os.environ.get("FIREFOX_SB_ONLY") == "1"
+                    pre_bypass = (os.environ.get("FIREFOX_PRE_CLOUDSCRAPER", "1") == "1") and not sb_only
+                    if sb_only:
+                        print("[Auth Bot] 🦊 FIREFOX_SB_ONLY=1 -> Skipping cloudscraper pre-bypass (pure SeleniumBase mode)")
                     transplanted = False
                     cookies_dict = {}
                     if pre_bypass:
@@ -634,7 +638,12 @@ def get_upwork_headers():
                         "cdn-cgi" in current_url or
                         "Just a moment" in page_source or
                         "Checking your browser" in page_source or
-                        "Ray ID:" in page_source
+                        "Ray ID:" in page_source or
+                        "cf-error-details" in page_source or
+                        "challenge-form" in page_source or
+                        "turnstile" in page_source or
+                        "cf-chl-widget" in page_source or
+                        "Attention Required" in page_source
                     )
                     
                     if not is_challenge:
@@ -654,10 +663,38 @@ def get_upwork_headers():
                                 sb.execute_script("location.reload();")
                             except Exception:
                                 pass
+                        # Mid-loop base domain reset to let Cloudflare set clearance cookie
+                        if is_challenge and attempt in (5, 9) and attempt < (max_attempts - 2):
+                            try:
+                                print(f"[Auth Bot] Firefox: Base domain reset (attempt {attempt+1})")
+                                sb.open("https://www.upwork.com/")
+                                sb.sleep(2)
+                                sb.open(url)
+                            except Exception:
+                                pass
                         # Minor DOM event noise early on (only if headful)
                         if is_challenge and attempt < 6 and sb_kwargs.get("headless") is False:
                             try:
                                 sb.execute_script("document.body.dispatchEvent(new Event('mousemove'))")
+                            except Exception:
+                                pass
+                        # Randomize viewport once to reduce static fingerprint
+                        if attempt == 0:
+                            try:
+                                import random
+                                w = random.randint(1200, 1620)
+                                h = random.randint(820, 1000)
+                                sb.set_window_size(w, h)
+                                print(f"[Auth Bot] 🦊 Randomized viewport to {w}x{h}")
+                            except Exception:
+                                pass
+                        # Light scroll jitter each challenged attempt
+                        if is_challenge:
+                            try:
+                                import random as _r
+                                sb.execute_script(f"window.scrollBy(0, {_r.randint(40,220)});")
+                                sb.sleep(0.25)
+                                sb.execute_script(f"window.scrollBy(0, -{_r.randint(10,140)});")
                             except Exception:
                                 pass
                     
@@ -665,6 +702,33 @@ def get_upwork_headers():
                 else:
                     print("[Auth Bot] ⚠️ Cloudflare challenge timeout - continuing anyway")
                     print(f"[Auth Bot] Final URL: {sb.get_current_url()}")
+                    # Optional profile refresh & retry once (pure SeleniumBase path) if still clearly challenged
+                    if use_firefox and os.environ.get("FIREFOX_PROFILE_REFRESH") == "1":
+                        try:
+                            still_challenge = any(k in sb.get_page_source() for k in ["challenge-platform","cf-error-details","turnstile","cf-chl-widget","Just a moment","Checking your browser"])
+                        except Exception:
+                            still_challenge = False
+                        if still_challenge:
+                            try:
+                                import shutil, tempfile
+                                print("[Auth Bot] 🔄 Firefox: Profile refresh triggered (FIREFOX_PROFILE_REFRESH=1)")
+                                new_profile = tempfile.mkdtemp(prefix="fx_profile_")
+                                sb.quit()
+                                # Relaunch minimal new session and attempt single warm pass
+                                from seleniumbase import SB as _SB
+                                relaunch_kwargs = dict(sb_kwargs)
+                                relaunch_kwargs["user_data_dir"] = new_profile
+                                with _SB(**relaunch_kwargs) as sb2:
+                                    sb2.open("https://www.upwork.com/")
+                                    sb2.sleep(2)
+                                    sb2.open(url)
+                                    sb2.sleep(6)
+                                    if any(t in sb2.get_page_source() for t in ["challenge-platform","Just a moment","Checking your browser"]):
+                                        print("[Auth Bot] 🔄 Profile refresh did not bypass challenge")
+                                    else:
+                                        print("[Auth Bot] ✅ Bypass succeeded after profile refresh")
+                            except Exception as pr_e:
+                                print(f"[Auth Bot] ⚠️ Profile refresh failed: {pr_e}")
 
                 print("[Auth Bot] Loading job listings...")
                 try:
