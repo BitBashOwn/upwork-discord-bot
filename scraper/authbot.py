@@ -258,236 +258,221 @@ def _ensure_visitor_id(headers, base_dir):
         print(f"[Auth Bot] ⚠️ _ensure_visitor_id error: {e}")
         return headers
 
-def _inject_network_monitor_early(driver):
-    """Inject network monitor as early as possible for Firefox"""
-    monitor_script = """
-    (function(){
-        console.log('[Monitor] Installing network interceptor...');
-        
-        function shouldCapture(u){
-            if(!u || typeof u !== 'string') return false;
-            u = u.toLowerCase();
-            // Capture all GraphQL and job-related requests
-            return (
-                u.includes('graphql') ||
-                u.includes('visitorjobsearch') ||
-                u.includes('jobpubdetails') ||
-                u.includes('api/profiles') ||
-                u.includes('api/jobs')
-            );
-        }
-        
-        window.capturedRequests = window.capturedRequests || [];
-        
-        // Intercept fetch
-        const originalFetch = window.fetch;
-        window.fetch = function(...args){
-            const url = typeof args[0] === 'string' ? args[0] : args[0].url || '';
-            const options = args[1] || {};
-            
-            if(shouldCapture(url)){
-                const reqData = {
-                    ts: Date.now(),
-                    url: url,
-                    headers: {},
-                    method: (options.method || 'GET').toUpperCase(),
-                    body: options.body || null,
-                    type: 'fetch'
-                };
-                
-                // Capture headers
-                if(options.headers){
-                    if(options.headers instanceof Headers){
-                        options.headers.forEach((value, key) => {
-                            reqData.headers[key] = value;
-                        });
-                    } else if(Array.isArray(options.headers)){
-                        options.headers.forEach(([key, value]) => {
-                            reqData.headers[key] = value;
-                        });
-                    } else {
-                        reqData.headers = options.headers;
-                    }
-                }
-                
-                window.capturedRequests.push(reqData);
-                console.log('[Monitor] Captured fetch:', url);
-            }
-            
-            return originalFetch.apply(this, args);
-        };
-        
-        // Intercept XMLHttpRequest
-        const originalXHROpen = XMLHttpRequest.prototype.open;
-        const originalXHRSend = XMLHttpRequest.prototype.send;
-        const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-        
-        XMLHttpRequest.prototype.open = function(method, url){
-            this._method = method;
-            this._url = url;
-            this._headers = {};
-            return originalXHROpen.apply(this, arguments);
-        };
-        
-        XMLHttpRequest.prototype.setRequestHeader = function(header, value){
-            this._headers[header] = value;
-            return originalSetHeader.call(this, header, value);
-        };
-        
-        XMLHttpRequest.prototype.send = function(data){
-            if(shouldCapture(this._url)){
-                const reqData = {
-                    ts: Date.now(),
-                    url: this._url,
-                    method: (this._method || 'GET').toUpperCase(),
-                    headers: this._headers || {},
-                    body: data || null,
-                    type: 'xhr'
-                };
-                window.capturedRequests.push(reqData);
-                console.log('[Monitor] Captured XHR:', this._url);
-            }
-            return originalXHRSend.apply(this, arguments);
-        };
-        
-        console.log('[Monitor] Network interceptor installed successfully');
-    })();
-    """
-    
+def _attempt_extract_visitor_ids(sb):
+    """Try to extract visitor / trace identifiers from localStorage or cookies."""
     try:
-        driver.execute_script(monitor_script)
-        print("[Auth Bot] ✅ Early network monitor injected")
-        return True
+        ids = sb.execute_script(
+            """
+            const out = {visitor:null, trace:null, storage:{}, cookies:{}};
+            try {
+              // Check localStorage
+              for (let i=0;i<localStorage.length;i++) {
+                const k = localStorage.key(i);
+                const v = localStorage.getItem(k);
+                out.storage[k]=v;
+                if(!out.visitor && /visitor/i.test(k) && v && v.length < 80) out.visitor = v;
+                if(!out.trace && /trace/i.test(k) && v && v.length < 80) out.trace = v;
+              }
+              // Check document cookies
+              const cookies = document.cookie.split(';');
+              for(let cookie of cookies) {
+                const [name, value] = cookie.trim().split('=');
+                if(name && value) {
+                  out.cookies[name] = value;
+                  if(!out.visitor && /visitor/i.test(name) && value.length < 80) out.visitor = value;
+                  if(!out.trace && /trace/i.test(name) && value.length < 80) out.trace = value;
+                }
+              }
+              // Look for common Upwork visitor patterns
+              if(!out.visitor) {
+                for(const [k,v] of Object.entries(out.storage)) {
+                  if(/eo.*visitor|visitor.*id|user.*id/i.test(k) && v && v.length > 10 && v.length < 50) {
+                    out.visitor = v;
+                    break;
+                  }
+                }
+              }
+              // Also check session storage
+              if(!out.visitor) {
+                try {
+                  for(let i=0;i<sessionStorage.length;i++) {
+                    const k = sessionStorage.key(i);
+                    const v = sessionStorage.getItem(k);
+                    if(/visitor/i.test(k) && v && v.length > 10 && v.length < 80) {
+                      out.visitor = v;
+                      break;
+                    }
+                  }
+                } catch(e) {}
+              }
+              // Try to extract from page HTML/scripts as fallback
+              if(!out.visitor) {
+                const scripts = document.querySelectorAll('script');
+                for(let script of scripts) {
+                  const text = script.textContent || script.innerText || '';
+                  const match = text.match(/["']([a-f0-9-]{20,40})["'].*visitor/i) || text.match(/visitor.*["']([a-f0-9-]{20,40})["']/i);
+                  if(match && match[1]) {
+                    out.visitor = match[1];
+                    break;
+                  }
+                }
+              }
+              // Check for any stored authentication tokens that might contain visitor info
+              if(!out.visitor) {
+                for(const [k,v] of Object.entries(out.storage)) {
+                  if(typeof v === 'string' && v.length >= 20 && v.length <= 60) {
+                    // Look for hex-like patterns that could be visitor IDs
+                    if(/^[a-f0-9-]{20,50}$/i.test(v) && (k.toLowerCase().includes('auth') || k.toLowerCase().includes('token') || k.toLowerCase().includes('id'))) {
+                      out.visitor = v;
+                      break;
+                    }
+                  }
+                }
+              }
+            } catch(e) { out.error = e.toString(); }
+            return out;
+            """
+        )
+        visitor = ids.get('visitor') if isinstance(ids, dict) else None
+        trace = ids.get('trace') if isinstance(ids, dict) else None
+        print(f"[Auth Bot] 🔍 Storage scan: {len(ids.get('storage', {}))} localStorage, {len(ids.get('cookies', {}))} cookies")
+        if visitor:
+            print(f"[Auth Bot] 🔑 Visitor ID found: {len(visitor)} chars, source: {_identify_visitor_source(ids, visitor)}")
+        return visitor, trace
     except Exception as e:
-        print(f"[Auth Bot] ⚠️ Could not inject early monitor: {e}")
-        return False
+        print(f"[Auth Bot] ⚠️ Visitor ID extraction failed: {e}")
+        return None, None
 
-def _firefox_wait_and_capture(driver):
-    """Enhanced Firefox-specific waiting and capture strategy"""
-    print("[Auth Bot] Firefox: Starting enhanced capture strategy...")
+def _identify_visitor_source(ids, visitor_id):
+    """Helper to identify where the visitor ID was found"""
+    if not isinstance(ids, dict) or not visitor_id:
+        return "unknown"
     
-    # Inject monitor immediately and at multiple points
-    _inject_network_monitor_early(driver)
+    # Check localStorage
+    for k, v in ids.get('storage', {}).items():
+        if v == visitor_id:
+            return f"localStorage[{k}]"
     
-    # Wait for initial page load
-    print("[Auth Bot] Firefox: Waiting for initial page load...")
-    time.sleep(5)
+    # Check cookies
+    for k, v in ids.get('cookies', {}).items():
+        if v == visitor_id:
+            return f"cookie[{k}]"
     
-    # Re-inject monitor in case page reloaded
-    _inject_network_monitor_early(driver)
-    
-    # Check for Cloudflare challenge
-    for attempt in range(5):
-        try:
-            page_source = driver.page_source
-            if "Just a moment" in page_source or "Checking your browser" in page_source:
-                print(f"[Auth Bot] Firefox: Cloudflare challenge detected, waiting... (attempt {attempt+1})")
-                time.sleep(3)
-            else:
-                print("[Auth Bot] Firefox: Page appears loaded")
-                break
-        except Exception:
-            pass
-    
-    # Wait for jobs to load
-    print("[Auth Bot] Firefox: Waiting for job listings...")
-    time.sleep(5)
-    
-    # Try to trigger API calls by scrolling
-    print("[Auth Bot] Firefox: Triggering API calls via scroll...")
-    try:
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-        time.sleep(2)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
-    except Exception:
-        pass
-    
-    # Try to click a job card with corrected selector
-    print("[Auth Bot] Firefox: Attempting to click job card...")
-    job_clicked = False
-    job_selectors = [
-        'a[data-test="job-tile-title-link"]',
-        'a[href*="/jobs/"]',  # Fixed: Added quotes
-        '.job-tile a',
-        'article a[href*="/jobs/"]'
+    return "script/fallback"
+
+def _ensure_geckodriver():
+    """Ensure geckodriver exists locally; return absolute path or None.
+
+    Strategy:
+    1. Check explicit GECKODRIVER env.
+    2. Check PATH for executable.
+    3. Check common system locations.
+    4. Check / create project-local drivers cache (./drivers/geckodriver[.exe]) and download latest.
+    Supports Linux (x86_64/arm64), macOS (x86_64/arm64), Windows (x86_64/arm64) using GitHub releases.
+    """
+    # 1. Env override
+    env_path = os.environ.get("GECKODRIVER")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    # 2. PATH scan
+    exe_name = "geckodriver.exe" if platform.system().lower().startswith("win") else "geckodriver"
+    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(path_dir.strip(), exe_name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    # 3. common locations
+    common = [
+        "/usr/local/bin/geckodriver",
+        "/usr/bin/geckodriver",
+        os.path.expanduser("~/bin/geckodriver"),
     ]
-    
-    for selector in job_selectors:
+    for c in common:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    # 4. project-local cache
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    drivers_dir = os.path.join(script_dir, "drivers")
+    os.makedirs(drivers_dir, exist_ok=True)
+    local_path = os.path.join(drivers_dir, exe_name)
+    if os.path.exists(local_path):
+        # make sure it's executable
         try:
-            elements = driver.find_elements("css selector", selector)
-            if elements:
-                # Try JavaScript click
-                driver.execute_script("arguments[0].scrollIntoView(true);", elements[0])
-                time.sleep(1)
-                driver.execute_script("arguments[0].click();", elements[0])
-                print(f"[Auth Bot] Firefox: ✅ Clicked job via: {selector}")
-                job_clicked = True
-                break
-        except Exception as e:
-            continue
-    
-    if not job_clicked:
-        # Alternative: navigate directly to a job details page
-        try:
-            driver.execute_script("""
-                var links = document.querySelectorAll('a');
-                for(var i = 0; i < links.length; i++) {
-                    if(links[i].href && links[i].href.includes('/jobs/')) {
-                        window.location.href = links[i].href;
-                        return true;
-                    }
-                }
-                return false;
-            """)
-            print("[Auth Bot] Firefox: Navigated to job details via JavaScript")
-            job_clicked = True
+            st = os.stat(local_path)
+            os.chmod(local_path, st.st_mode | stat.S_IEXEC)
         except Exception:
             pass
-    
-    if job_clicked:
-        print("[Auth Bot] Firefox: Waiting for job details to load...")
-        time.sleep(5)
-        # Re-inject monitor after navigation
-        _inject_network_monitor_early(driver)
-    
-    # Try pagination as fallback
-    print("[Auth Bot] Firefox: Trying pagination...")
+        return local_path
+    # Need to download
     try:
-        driver.execute_script("""
-            var btns = document.querySelectorAll('button');
-            for(var i = 0; i < btns.length; i++) {
-                if(btns[i].textContent.includes('2') || 
-                   btns[i].getAttribute('aria-label') === 'Go to page 2' ||
-                   btns[i].getAttribute('data-ev-page_index') === '2') {
-                    btns[i].click();
-                    return true;
-                }
-            }
-            return false;
-        """)
-        print("[Auth Bot] Firefox: Clicked page 2")
-        time.sleep(4)
-    except Exception:
-        pass
-    
-    # Final wait for any pending requests
-    time.sleep(3)
-    
-    # Retrieve captured requests
-    try:
-        captured = driver.execute_script("return window.capturedRequests || [];")
-        print(f"[Auth Bot] Firefox: Total captured requests: {len(captured)}")
-        
-        # Debug: Show what URLs were captured
-        if captured:
-            urls = [req.get('url', '') for req in captured[:5]]
-            print(f"[Auth Bot] Firefox: Sample captured URLs: {urls}")
-        
-        return captured
-    except Exception as e:
-        print(f"[Auth Bot] Firefox: Error retrieving captured requests: {e}")
-        return []
+        arch_raw = platform.machine().lower()
+        system = platform.system().lower()
+        if system == "linux":
+            if arch_raw in ("aarch64", "arm64"):
+                asset_arch = "linux-aarch64"
+            elif arch_raw in ("x86_64", "amd64"):
+                asset_arch = "linux64"
+            else:
+                print(f"[Auth Bot] ⚠️ Unsupported linux arch for auto geckodriver: {arch_raw}")
+                return None
+            archive_ext = ".tar.gz"
+        elif system == "darwin":
+            if arch_raw in ("arm64", "aarch64"):
+                asset_arch = "macos-aarch64"
+            else:
+                asset_arch = "macos"
+            archive_ext = ".tar.gz"
+        elif system == "windows":
+            # Windows builds only for 64-bit
+            asset_arch = "win64" if arch_raw in ("x86_64", "amd64", "arm64") else "win32"
+            archive_ext = ".zip"
+        else:
+            print(f"[Auth Bot] ⚠️ Unsupported OS for auto geckodriver: {system}")
+            return None
+
+        api_url = "https://api.github.com/repos/mozilla/geckodriver/releases/latest"
+        print("[Auth Bot] 📥 Fetching latest geckodriver release metadata...")
+        with urllib.request.urlopen(api_url, timeout=30) as r:
+            release = json.loads(r.read().decode())
+        tag = release.get("tag_name")
+        if not tag:
+            print("[Auth Bot] ⚠️ Unable to parse geckodriver tag")
+            return None
+        expected_name_part = f"geckodriver-{tag}-{asset_arch}"
+        asset = None
+        for a in release.get("assets", []):
+            url = a.get("browser_download_url", "")
+            if expected_name_part in url and url.endswith(archive_ext):
+                asset = url
+                break
+        if not asset:
+            print(f"[Auth Bot] ⚠️ Could not find asset for {expected_name_part}")
+            return None
+        tmpdir = tempfile.mkdtemp(prefix="gecko_dl_")
+        archive_file = os.path.join(tmpdir, os.path.basename(asset))
+        print(f"[Auth Bot] ⬇️ Downloading {os.path.basename(asset)} ...")
+        urllib.request.urlretrieve(asset, archive_file)
+        if archive_ext == ".zip":
+            with zipfile.ZipFile(archive_file, 'r') as zf:
+                zf.extractall(tmpdir)
+        else:
+            with tarfile.open(archive_file, 'r:gz') as tf:
+                tf.extract("geckodriver", path=tmpdir)
+        extracted = os.path.join(tmpdir, exe_name)
+        if not os.path.exists(extracted):
+            # Some archives don't contain .exe name until rename
+            alt = os.path.join(tmpdir, "geckodriver")
+            if os.path.exists(alt):
+                extracted = alt
+        shutil.copy2(extracted, local_path)
+        os.chmod(local_path, 0o755)
+        print(f"[Auth Bot] ✅ geckodriver ready at {local_path}")
+        # Prepend to PATH for current process
+        os.environ["PATH"] = drivers_dir + os.pathsep + os.environ.get("PATH", "")
+        os.environ.setdefault("GECKODRIVER", local_path)
+        return local_path
+    except Exception as dl_e:
+        print(f"[Auth Bot] ❌ Failed to auto-download geckodriver: {dl_e}")
+        return None
 
 def get_upwork_headers():
     """Get Upwork headers using SeleniumBase with optimized speed."""
@@ -504,30 +489,74 @@ def get_upwork_headers():
     except Exception:
         pass
     
-    # Try Chrome first unless forced to use Firefox
+    # Strategy: Prefer undetected Chrome first unless forced
     use_firefox = force_firefox
+    engine_desc = "Firefox (forced)" if use_firefox else "Chrome attempt (uc)"
+    print(f"[Auth Bot] Starting browser engine: {engine_desc} | force_firefox={force_firefox} is_ubuntu={is_ubuntu}")
     
-    if not use_firefox:
-        print("[Auth Bot] Attempting Chrome with undetected mode...")
+    try:
+        # Build SeleniumBase context arguments dynamically
+        sb_kwargs = {
+            "test": True,
+            "locale": "en",
+            "headless": True,
+            "page_load_strategy": "eager",
+        }
+        if not use_firefox:
+            sb_kwargs["uc"] = True
+        else:
+            sb_kwargs["browser"] = "firefox"
+            gecko_path = _ensure_geckodriver()
+            if gecko_path:
+                print(f"[Auth Bot] 🦊 Using geckodriver: {gecko_path}")
+            else:
+                print("[Auth Bot] ⚠️ geckodriver still missing; SeleniumBase may fail. Raw fallback will try again.")
+        
         try:
-            with SB(uc=True, test=True, locale="en", headless=True, page_load_strategy="eager") as sb:
+            with SB(**sb_kwargs) as sb:
                 url = "https://www.upwork.com/nx/search/jobs/?q=python"
                 try:
                     sb.activate_cdp_mode(url)
                 except Exception:
                     sb.open(url)
                 
-                # Chrome flow (existing working code)
-                print("[Auth Bot] Chrome: Waiting for Cloudflare bypass...")
-                for attempt in range(8):
+                url = "https://www.upwork.com/nx/search/jobs/?q=python"
+                if not use_firefox:
+                    try:
+                        sb.activate_cdp_mode(url)
+                    except Exception as e:
+                        print(f"[Auth Bot] CDP activation skipped: {e}")
+                else:
+                    sb.open(url)
+                
+                print("[Auth Bot] Waiting for Cloudflare bypass...")
+                max_attempts = 8
+                for attempt in range(max_attempts):
                     sb.sleep(3)
                     try:
                         sb.uc_gui_click_captcha()
+                        print(f"[Auth Bot] Attempt {attempt+1}: Clicked captcha")
                     except Exception:
                         pass
                     if sb.is_element_visible(".air3-card"):
-                        print("[Auth Bot] Chrome: ✅ Cloudflare bypassed!")
+                        print("[Auth Bot] ✅ Cloudflare bypassed!")
                         break
+                    page_source = sb.get_page_source()
+                    if "Just a moment" not in page_source:
+                        print("[Auth Bot] ✅ Challenge bypassed!")
+                        break
+                else:
+                    print("[Auth Bot] ⚠️ Cloudflare challenge timeout - continuing anyway")
+                
+                print("[Auth Bot] Loading job listings...")
+                try:
+                    sb.wait_for_element(".air3-card", timeout=15)
+                    print("[Auth Bot] ✅ Jobs loaded")
+                    sb.sleep(5)
+                except Exception:
+                    print("[Auth Bot] ⚠️ Job cards timeout - checking page...")
+                    current_url = sb.get_current_url()
+                    print(f"[Auth Bot] Current URL: {current_url}")
                 
                 # Inject network monitor
                 monitor_script = """
@@ -680,58 +709,105 @@ def get_upwork_headers():
         except Exception as e:
             print(f"[Auth Bot] Firefox error: {e}")
             return False
+    except Exception as e:
+        print(f"[Auth Bot] ❌ Automation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    # Debug: Check what we captured
+    print(f"\n[Auth Bot] 📊 Capture Summary:")
+    print(f"[Auth Bot] Headers captured: {headers_found is not None} ({len(headers_found) if headers_found else 0} keys)")
+    print(f"[Auth Bot] Cookies captured: {cookies_found is not None} ({len(cookies_found) if cookies_found else 0} keys)")
     
-    # Create fallback headers if nothing captured
-    if not headers_found:
-        print("[Auth Bot] Using comprehensive fallback headers...")
-        headers_found = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Origin': 'https://www.upwork.com',
-            'Referer': 'https://www.upwork.com/nx/search/jobs/',
-        }
+    # Additional debug
+    if headers_found is None:
+        print("[Auth Bot] ⚠️ WARNING: headers_found is None!")
+    if cookies_found is None:
+        print("[Auth Bot] ⚠️ WARNING: cookies_found is None!")
     
-    if not cookies_found:
-        cookies_found = {}
+    print(f"[Auth Bot] Condition check: headers_found and cookies_found = {headers_found is not None and cookies_found is not None}")
     
-    # Save and test
-    if headers_found:
+    # Save headers and cookies
+    if headers_found is not None and cookies_found is not None:
         try:
+            # Get consistent base directory
             script_dir = os.path.dirname(os.path.abspath(__file__))
             
-            # Enrich headers
-            headers_found = _enrich_headers(headers_found, cookies_found, 
-                                           'https://www.upwork.com/nx/search/jobs/')
+            # Save to primary location
+            headers_file = os.path.join(script_dir, "headers_upwork.json")
+            with open(headers_file, "w") as f:
+                json.dump(headers_found, f, indent=2)
+            print(f"[Auth Bot] ✅ Headers saved to {headers_file}")
+            
+            # Save to secondary location for compatibility
+            job_details_headers_file = os.path.join(script_dir, "job_details_headers.json")
+            with open(job_details_headers_file, "w") as f:
+                json.dump(headers_found, f, indent=2)
+            print(f"[Auth Bot] ✅ Headers also saved to {job_details_headers_file}")
+            
+            # Save cookies to job_details_cookies.json
+            job_details_cookies_file = os.path.join(script_dir, "job_details_cookies.json")
+            with open(job_details_cookies_file, "w") as f:
+                json.dump(cookies_found, f, indent=2)
+            print(f"[Auth Bot] ✅ Cookies also saved to {job_details_cookies_file}")
+            
+            # Display sample of captured headers
+            print("[Auth Bot] 📋 Header sample:")
+            for key in list(headers_found.keys())[:5]:
+                value = str(headers_found[key])[:50]
+                print(f"  {key}: {value}...")
+            
+            # Add standard headers if missing
+            if 'User-Agent' not in headers_found:
+                headers_found['User-Agent'] = headers_found.get('user-agent', 'Mozilla/5.0')
+            if 'Accept' not in headers_found:
+                headers_found['Accept'] = 'application/json, text/plain, */*'
+            
+            # TEST: Validate credentials by fetching job details
+            print("\n[Auth Bot] 🧪 Testing captured credentials...")
+            print(f"[Auth Bot] Headers to test: {len(headers_found)} keys")
+            print(f"[Auth Bot] Cookies to test: {len(cookies_found)} keys")
+            
+            # Enrich headers before testing
+            current_url = headers_found.get('Referer') or headers_found.get('referer') or 'https://www.upwork.com/nx/search/jobs/'
+            headers_found = _enrich_headers(headers_found, cookies_found, current_url)
+            # Ensure stable visitor ID (persisted synthetic if real not captured)
             headers_found = _ensure_visitor_id(headers_found, script_dir)
             
-            # Save files
-            with open(os.path.join(script_dir, "headers_upwork.json"), "w") as f:
-                json.dump(headers_found, f, indent=2)
-            with open(os.path.join(script_dir, "job_details_headers.json"), "w") as f:
-                json.dump(headers_found, f, indent=2)
-            with open(os.path.join(script_dir, "upwork_cookies.json"), "w") as f:
-                json.dump(cookies_found, f, indent=2)
-            with open(os.path.join(script_dir, "job_details_cookies.json"), "w") as f:
-                json.dump(cookies_found, f, indent=2)
-            
-            print(f"[Auth Bot] ✅ Saved {len(headers_found)} headers and {len(cookies_found)} cookies")
-            
-            # Test
+            # Re-save enriched headers to ensure visitor ID and other enrichments are persisted
+            try:
+                with open(headers_file, "w") as f:
+                    json.dump(headers_found, f, indent=2)
+                with open(job_details_headers_file, "w") as f:
+                    json.dump(headers_found, f, indent=2)
+                print(f"[Auth Bot] ✅ Re-saved enriched headers with {len(headers_found)} total keys")
+            except Exception as e:
+                print(f"[Auth Bot] ⚠️ Could not re-save enriched headers: {e}")
+
             test_success = test_job_details_fetch(headers_found, cookies_found)
-            if test_success:
-                print("[Auth Bot] ✅ Validation PASSED!")
-            else:
-                print("[Auth Bot] ⚠️ Validation failed but headers saved")
             
-            return True
+            if test_success:
+                print("\n[Auth Bot] ✅ Credentials validation PASSED!")
+                print("[Auth Bot] Headers and cookies are working correctly!")
+                return True
+            else:
+                print("\n[Auth Bot] ⚠️ Credentials validation FAILED!")
+                print("[Auth Bot] Headers/cookies were captured but may not work for all requests")
+                print("[Auth Bot] This could be normal for public-only API access")
+                return True  # Still return True since we captured something
             
         except Exception as e:
-            print(f"[Auth Bot] Error saving: {e}")
+            print(f"[Auth Bot] ❌ Error saving headers: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-    
-    return False
+    elif headers_found:
+        print("[Auth Bot] ⚠️ Headers captured but no cookies found")
+        return False
+    else:
+        print("[Auth Bot] ❌ No headers found")
+        return False
 
 def verify_headers():
     """Verify that saved headers are valid"""
